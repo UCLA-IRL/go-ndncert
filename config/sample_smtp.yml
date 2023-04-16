@@ -1,0 +1,7 @@
+---
+smtp:
+  identity: sender_email_address@sender_email_domain
+  username: smtp_auth_username
+  password: smtp_auth_password
+  host: smtp_host_address
+  port: 587 # 25: default smtp port (mostly deprecated); 485: deprecated smtp port, 587: recommended port;
