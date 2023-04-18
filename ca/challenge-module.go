@@ -2,8 +2,8 @@ package ca
 
 import (
 	"fmt"
+	"go-ndncert/email"
 	"math/rand"
-	"ndn/ndncert/challenge/email"
 	"time"
 )
 

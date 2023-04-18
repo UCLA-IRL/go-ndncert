@@ -8,9 +8,9 @@ import (
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
 	"github.com/zjkmxy/go-ndn/pkg/security"
 	"github.com/zjkmxy/go-ndn/pkg/utils"
-	"ndn/ndncert/challenge/ca"
-	"ndn/ndncert/challenge/crypto"
-	"ndn/ndncert/challenge/schemaold"
+	"go-ndncert/ca"
+	"go-ndncert/crypto"
+	"go-ndncert/schemaold"
 )
 
 func main() {
