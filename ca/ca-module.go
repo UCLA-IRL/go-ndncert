@@ -126,8 +126,6 @@ func OnNew(i ndn.Interest) spec_2022.Data {
 	requestState.requestType = New
 	requestState.caPrefix = caPrefixName
 
-	//requestId := make([]byte, 8)
-	//io.ReadFull(rand.Reader, requestId)
 	_requestId, _ := randutil.Alphanumeric(8)
 	requestId := make([]byte, 8)
 	copy(requestId, _requestId)

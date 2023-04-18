@@ -41,7 +41,6 @@ type EmailChallenge interface {
 	generateSecretCode() string
 	InitiateChallenge(email string) error
 	CheckCode(secret uint) (bool, error)
-	//HandleChallengeRequest() (string, )
 	GetChallengeStatus() int
 	sendEmail()
 }
