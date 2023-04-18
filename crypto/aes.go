@@ -47,13 +47,8 @@ func EncryptPayload(key [TagSizeBytes]byte, plaintext []byte, requestId [8]uint8
 
 	out := aesgcm.Seal(nil, nonce, plaintext, requestId[:])
 	encryptedPayload := out[:len(plaintext)]
-	_authenticationTag := out[len(plaintext):]
-
-	var initializationVector [NonceSizeBytes]byte
-	var authenticationTag [TagSizeBytes]byte
-
-	copy(initializationVector[:], nonce)
-	copy(authenticationTag[:], _authenticationTag)
+	authenticationTag := ([TagSizeBytes]byte)(out[len(plaintext):])
+	initializationVector := ([NonceSizeBytes]byte)(nonce)
 
 	return EncryptedMessage{
 		initializationVector,
