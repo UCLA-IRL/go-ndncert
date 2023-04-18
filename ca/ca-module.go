@@ -86,6 +86,17 @@ const negativeRequestIdOffset = -2
 var storage = make(map[[8]byte]*RequestState)
 var availableChallenges = []string{"email"}
 
+func validateName(certName string) {
+	nameComponents := strings.Split(certName, "/")
+	if len(nameComponents) < minimumCertificateComponentSize {
+		// TODO: Add error handling for failure to meet number of certificate components
+	}
+
+	if nameComponents[len(nameComponents)+negativeKeyComponentOffset] != keyString {
+		// TODO: Add error handling for failure to match keyString correctly
+	}
+}
+
 func OnNew(i ndn.Interest) spec_2022.Data {
 	var requestState RequestState
 
@@ -106,14 +117,7 @@ func OnNew(i ndn.Interest) spec_2022.Data {
 		panic(err.Error())
 	}
 
-	nameComponents := strings.Split(certReqData.Name().String(), "/")
-	if len(nameComponents) < minimumCertificateComponentSize {
-		panic(err.Error())
-	}
-
-	if nameComponents[len(nameComponents)+negativeKeyComponentOffset] != keyString {
-		panic(err.Error())
-	}
+	validateName(certReqData.Name().String())
 
 	ecdhState := crypto.ECDHState{}
 	ecdhState.GenerateKeyPair()
@@ -121,14 +125,13 @@ func OnNew(i ndn.Interest) spec_2022.Data {
 	salt := make([]byte, sha256.New().Size())
 	rand.Read(salt)
 
-	symmetricKey := crypto.HKDF(ecdhState.GetSharedSecret(), salt)
+	symmetricKey := ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt))
 
 	requestState.requestType = New
 	requestState.caPrefix = caPrefixName
 
 	_requestId, _ := randutil.Alphanumeric(8)
-	requestId := make([]byte, 8)
-	copy(requestId, _requestId)
+	requestId := ([8]byte)([]byte(_requestId))
 
 	contentType := ndn.ContentTypeBlob
 	fourSeconds := 4 * time.Second
@@ -141,19 +144,13 @@ func OnNew(i ndn.Interest) spec_2022.Data {
 
 	cmdNewDataWire := cmdNewData.Encode()
 
-	var requestIdFixed [8]byte
-	var symmetricKeyFixed [16]byte
-
-	copy(requestIdFixed[:], requestId[:])
-	copy(symmetricKeyFixed[:], symmetricKey)
-
-	storage[requestIdFixed] = &RequestState{
+	storage[requestId] = &RequestState{
 		caPrefix:      caPrefixName,
-		requestId:     requestIdFixed,
+		requestId:     requestId,
 		requestType:   New,
 		status:        CaModuleBeforeChallenge,
 		cert:          certReqData,
-		encryptionKey: symmetricKeyFixed,
+		encryptionKey: symmetricKey,
 	}
 
 	return spec_2022.Data{
@@ -170,11 +167,8 @@ func OnNew(i ndn.Interest) spec_2022.Data {
 }
 
 func OnChallenge(i ndn.Interest) spec_2022.Data {
-	var requestIdFixed [8]byte
-
 	nameComponents := strings.Split(i.Name().String(), "/")
-	requestId := []byte(nameComponents[len(nameComponents)+negativeRequestIdOffset])
-	copy(requestIdFixed[:], requestId)
+	requestId := ([8]byte)([]byte(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
 
 	cipherMsgReader := enc.NewWireReader(i.AppParam())
 	cipherMsg, err := schemaold.ParseCipherMsg(cipherMsgReader, true)
@@ -182,22 +176,19 @@ func OnChallenge(i ndn.Interest) spec_2022.Data {
 		panic(err.Error())
 	}
 
-	var initializationVector [crypto.NonceSizeBytes]byte
-	var authenticationTag [crypto.TagSizeBytes]byte
-
-	copy(initializationVector[:], cipherMsg.InitVec)
-	copy(authenticationTag[:], cipherMsg.AuthNTag)
+	initializationVector := ([crypto.NonceSizeBytes]byte)(cipherMsg.InitVec)
+	authenticationTag := ([crypto.TagSizeBytes]byte)(cipherMsg.AuthNTag)
 
 	encryptedMsg := crypto.EncryptedMessage{
-		initializationVector,
-		authenticationTag,
-		cipherMsg.Payload,
+		InitializationVector: initializationVector,
+		AuthenticationTag:    authenticationTag,
+		EncryptedPayload:     cipherMsg.Payload,
 	}
 
-	fmt.Printf("requestId: %s\n", requestIdFixed)
-	requestState := storage[requestIdFixed]
+	fmt.Printf("requestId: %s\n", requestId)
+	requestState := storage[requestId]
 
-	plaintext := crypto.DecryptPayload(requestState.encryptionKey, encryptedMsg, requestIdFixed)
+	plaintext := crypto.DecryptPayload(requestState.encryptionKey, encryptedMsg, requestId)
 	plaintextReader := enc.NewBufferReader(plaintext)
 	challengeIntPlaintext, err := schemaold.ParseChallengeIntPlain(plaintextReader, true)
 	if err != nil {
@@ -237,7 +228,7 @@ func OnChallenge(i ndn.Interest) spec_2022.Data {
 		code := string(challengeIntPlaintext.Params[0].ParamValue)
 		status, _ := requestState.ChallengeState.CheckCode(code)
 		if status == ChallengeModuleFailure {
-			delete(storage, requestIdFixed)
+			delete(storage, requestId)
 			// TODO: Prepare Error Data Packet
 
 		} else if status == ChallengeModuleWrongCode {
@@ -254,7 +245,7 @@ func OnChallenge(i ndn.Interest) spec_2022.Data {
 		} else {
 			requestState.status = CaModulePending
 			//TODO: Issue Certificate
-			delete(storage, requestIdFixed)
+			delete(storage, requestId)
 			requestState.status = Success
 			challengeStatus := uint64(requestState.ChallengeState.Status)
 			millisecondTS := strconv.FormatInt(time.Now().UnixMilli(), 10)
@@ -272,7 +263,7 @@ func OnChallenge(i ndn.Interest) spec_2022.Data {
 	}
 
 	chalDataBuf := chalData.Encode().Join()
-	chalDataEncryptedMessage := crypto.EncryptPayload(requestState.encryptionKey, chalDataBuf, requestIdFixed)
+	chalDataEncryptedMessage := crypto.EncryptPayload(requestState.encryptionKey, chalDataBuf, requestId)
 	chalDataCiphertext := schemaold.CipherMsg{
 		InitVec:  chalDataEncryptedMessage.InitializationVector[:],
 		AuthNTag: chalDataEncryptedMessage.AuthenticationTag[:],
