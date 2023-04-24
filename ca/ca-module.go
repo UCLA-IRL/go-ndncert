@@ -39,7 +39,7 @@ type RequestState struct {
 	 */
 	cert ndn.Data
 	/**
-	 * @brief The encryption key for the requester.
+	 * @brief The encryption key for the client.
 	 */
 	encryptionKey [16]byte
 	/**
@@ -97,34 +97,55 @@ func validateName(certName string) {
 	}
 }
 
+func getEcdhState(newInt *schemaold.CmdNewInt) crypto.ECDHState {
+	ecdhState := crypto.ECDHState{}
+	ecdhState.GenerateKeyPair()
+	ecdhState.SetRemotePublicKey(newInt.EcdhPub)
+
+	return ecdhState
+}
+
+func getSalt() []byte {
+	salt := make([]byte, sha256.New().Size())
+	rand.Read(salt)
+
+	return salt
+}
+
+func OnProfile() spec_2022.Data {
+	// TODO: Respond with data info.
+	return spec_2022.Data{}
+}
+
+func OnProbe(i ndn.Interest) spec_2022.Data {
+	// TODO: Figure out how to respond?
+	return spec_2022.Data{}
+}
+
 func OnNew(i ndn.Interest) spec_2022.Data {
 	var requestState RequestState
 
 	appParamReader := enc.NewWireReader(i.AppParam())
 	newInt, err := schemaold.ParseCmdNewInt(appParamReader, true)
 	if err != nil {
-		panic(err.Error())
+		// TODO: Handle error if parser fails to handle "NEW" interest packet.
 	}
 
 	certReqReader := enc.NewBufferReader(newInt.CertReq)
 	certReqData, _, err := spec_2022.Spec{}.ReadData(certReqReader)
 	if err != nil {
-		panic(err.Error())
+		// TODO: Handle error if certificate request reading fails.
 	}
 
 	caPrefixName, err := enc.NameFromStr(caName)
 	if !caPrefixName.IsPrefix(certReqData.Name()) {
-		panic(err.Error())
+		// TODO: Handle error if the cA name is not a prefix of the request data name.
 	}
 
 	validateName(certReqData.Name().String())
 
-	ecdhState := crypto.ECDHState{}
-	ecdhState.GenerateKeyPair()
-	ecdhState.SetRemotePublicKey(newInt.EcdhPub)
-	salt := make([]byte, sha256.New().Size())
-	rand.Read(salt)
-
+	ecdhState := getEcdhState(newInt)
+	salt := getSalt()
 	symmetricKey := ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt))
 
 	requestState.requestType = New
