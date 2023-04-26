@@ -67,10 +67,8 @@ const (
 )
 
 const (
-	Probe RequestType = iota
+	Profile RequestType = iota
 	New
-	Revoke
-	Renew
 )
 
 const (
@@ -117,11 +115,6 @@ func OnProfile() spec_2022.Data {
 	return spec_2022.Data{}
 }
 
-func OnProbe(i ndn.Interest) spec_2022.Data {
-	// TODO: Figure out how to respond?
-	return spec_2022.Data{}
-}
-
 func OnNew(i ndn.Interest) spec_2022.Data {
 	var requestState RequestState
 
@@ -139,7 +132,7 @@ func OnNew(i ndn.Interest) spec_2022.Data {
 
 	caPrefixName, err := enc.NameFromStr(caName)
 	if !caPrefixName.IsPrefix(certReqData.Name()) {
-		// TODO: Handle error if the cA name is not a prefix of the request data name.
+		// TODO: Handle error if the CA name is not a prefix of the request data name.
 	}
 
 	validateName(certReqData.Name().String())
