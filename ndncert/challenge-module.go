@@ -6,13 +6,6 @@ import (
 	"time"
 )
 
-type SendEmailStatus uint64
-
-const (
-	SendEmailStatusOk SendEmailStatus = iota
-	SendEmailStatusFailed
-)
-
 var maxAttempts uint64 = 3
 
 const (
@@ -31,22 +24,23 @@ type EmailChallengeState struct {
 	ChallengeState *ChallengeState
 }
 
-func NewEmailChallenge(emailAddress string) (*EmailChallengeState, SendEmailStatus) {
+func NewEmailChallenge(emailAddress string) (*EmailChallengeState, email.Status) {
 	var emailChallengeState = &EmailChallengeState{
 		Email:          emailAddress,
 		SecretCode:     generateSecretCode(),
 		ChallengeState: newChallengeState(),
 	}
 	sendEmailStatus := emailChallengeState.sendEmail()
-	if sendEmailStatus != SendEmailStatusOk {
+	if sendEmailStatus != email.StatusSuccess {
 		emailChallengeState = nil
 	}
 	return emailChallengeState, sendEmailStatus
 }
 
-func (e *EmailChallengeState) CheckCode(secret string) bool {
-	return time.Now().Before(e.ChallengeState.Expiry) && secret == e.SecretCode
-}
+//
+//func (e *EmailChallengeState) CheckCode(secret string) bool {
+//	return time.Now().Before(e.ChallengeState.Expiry) && secret == e.SecretCode
+//}
 
 func generateSecretCode() string {
 	var digits = []rune("0123456789")
@@ -64,15 +58,11 @@ func newChallengeState() *ChallengeState {
 	}
 }
 
-func (e *EmailChallengeState) sendEmail() SendEmailStatus {
+func (e *EmailChallengeState) sendEmail() email.Status {
 	secretEmail, status, _ := email.NewCodeEmail(e.Email, e.SecretCode)
-	if status != email.Success {
-		return SendEmailStatusFailed
-	} else {
+	if status == email.StatusSuccess {
 		sendStatus, _ := secretEmail.SendCodeEmail()
-		if sendStatus != email.Success {
-			return SendEmailStatusFailed
-		}
+		return sendStatus
 	}
-	return SendEmailStatusOk
+	return status
 }

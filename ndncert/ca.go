@@ -3,10 +3,12 @@ package ndncert
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
 	"go-ndncert/crypto"
+	"go-ndncert/email"
 	"go.step.sm/crypto/randutil"
 	"golang.org/x/exp/slices"
 	"strings"
@@ -99,18 +101,6 @@ const negativeKeyComponentOffset = -4
 const keyString = "KEY"
 const negativeRequestIdOffset = -2
 
-func validateName(certName string) ErrorCode {
-	nameComponents := strings.Split(certName, "/")
-	if len(nameComponents) < minimumCertificateComponentSize {
-		// TODO: Add error handling for failure to meet number of certificate components
-	}
-
-	if nameComponents[len(nameComponents)+negativeKeyComponentOffset] != keyString {
-		// TODO: Add error handling for failure to match keyString correctly
-	}
-	return NoErrorErrorCode
-}
-
 func getEcdhState(newInterest *NewInterest) crypto.ECDHState {
 	ecdhState := crypto.ECDHState{}
 	ecdhState.GenerateKeyPair()
@@ -135,38 +125,10 @@ func getRequestId(caState *CaState) RequestId {
 	return requestId
 }
 
-func handleEmailChallenge(caState *CaState, challengeInterestPlaintext *ChallengeInterestPlaintext, requestId RequestId) enc.Wire {
-	challengeRequestState, _ := caState.ChallengeRequestStateMapping[requestId]
-	if challengeRequestState.status == ChallengeStatusNewInterestReceived {
-		if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != "" {
-			// TODO: Handle the case where Parameters are malformed.
-		}
-
-		if challengeRequestState.challengeType != TbdChallengeType {
-			// TODO: Handle the case where challenge type
-		}
-
-		emailAddress := string(challengeInterestPlaintext.Parameters[0].ParameterValue)
-		emailChallengeState, sendEmailStatus := NewEmailChallenge(emailAddress)
-		if sendEmailStatus != SendEmailStatusOk {
-			// TODO: Handle failed email sending
-		}
-
-		challengeRequestState.status = ChallengeStatusChallengeIssued
-
-		remainingTimeUint64 := uint64(emailChallengeState.ChallengeState.Expiry.Second())
-		challengeParameters := Parameter{
-			ParameterKey:   "",
-			ParameterValue: nil,
-		}
-		challengeDataPlaintext := ChallengeDataPlaintext{
-			Status:          ApplicationStatusCodeChallenge,
-			ChallengeStatus: ChallengeStatusCodeNeedCode,
-			RemainingTries:  &emailChallengeState.ChallengeState.RemainingAttempts,
-			RemainingTime:   &remainingTimeUint64,
-			Parameters:      ,
-		}
-	}
+func generateCertificateName(caState *CaState) enc.Name {
+	// Generate random certificate name by taking ca prefix and appending a 16-long string
+	certificateName, _ := enc.NameFromStr(caState.CaPrefix + "/" + uniuri.New())
+	return certificateName
 }
 
 func OnNew(caState *CaState, interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
@@ -175,13 +137,6 @@ func OnNew(caState *CaState, interest ndn.Interest, rawInterest enc.Wire, sigCov
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
 		// TODO: Handle incorrect content type (not KEY)
 	}
-
-	//caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
-	//if !caPrefixName.IsPrefix(certRequestData.Name()) {
-	//	// TODO: Handle error if the CA name is not a prefix of the request data name.
-	//} // Question - should we even handle this?
-
-	//validateName(certRequestData.Name().String())
 
 	ecdhState := getEcdhState(newInterest)
 	salt := getSalt()
@@ -220,13 +175,11 @@ func OnChallenge(caState *CaState, interest ndn.Interest, rawInterest enc.Wire, 
 	encryptedMessage, _ := ParseEncryptedMessage(encryptedMessageReader, true)
 	initializationVector := ([crypto.NonceSizeBytes]byte)(encryptedMessage.InitializationVector)
 	authenticationTag := ([crypto.TagSizeBytes]byte)(encryptedMessage.AuthenticationTag)
-
 	encryptedMessageObject := crypto.EncryptedMessage{
 		InitializationVector: initializationVector,
 		AuthenticationTag:    authenticationTag,
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-
 	challengeRequestState, ok := caState.ChallengeRequestStateMapping[requestId]
 	if !ok {
 		// TODO: Handle the case where we do not have matching request id from NEW
@@ -239,7 +192,65 @@ func OnChallenge(caState *CaState, interest ndn.Interest, rawInterest enc.Wire, 
 		// TODO: Handle the case where available challenge is not supported
 	}
 
-	if challengeInterestPlaintext.SelectedChallenge == "email" {
-		reply(handleEmailChallenge(caState, challengeInterestPlaintext, requestId))
+	switch {
+	case challengeInterestPlaintext.SelectedChallenge == "email":
+		switch challengeRequestState.status {
+		case ChallengeStatusNewInterestReceived:
+			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != "email" {
+				// TODO: Handle the case where Parameters are malformed.
+			}
+
+			emailAddress := string(challengeInterestPlaintext.Parameters[0].ParameterValue)
+			emailChallengeState, sendEmailStatus := NewEmailChallenge(emailAddress)
+			if sendEmailStatus != email.StatusSuccess {
+				// TODO: Handle failed email sending
+				challengeRequestState.challengeState.ChallengeState.RemainingAttempts -= 1
+
+			} else {
+				challengeRequestState.status = ChallengeStatusChallengeIssued
+				remainingTimeUint64 := uint64(emailChallengeState.ChallengeState.Expiry.Second())
+				plaintextChallenge := ChallengeDataPlaintext{
+					Status:          ApplicationStatusCodeChallenge,
+					ChallengeStatus: ChallengeStatusCodeNeedCode,
+					RemainingTries:  &emailChallengeState.ChallengeState.RemainingAttempts,
+					RemainingTime:   &remainingTimeUint64,
+				}
+				encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+				challengeEncryptedMessage := EncryptedMessage{
+					InitializationVector: encryptedChallenge.InitializationVector[:],
+					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
+					EncryptedPayload:     encryptedChallenge.EncryptedPayload,
+				}
+
+				challengeRequestState.challengeState = emailChallengeState
+				reply(challengeEncryptedMessage.Encode())
+			}
+		case ChallengeStatusChallengeIssued:
+			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != "code" {
+				// TODO: Handle the case where Parameters are malformed.
+			}
+			if challengeRequestState.challengeState.ChallengeState.Expiry.After(time.Now()) {
+				// TODO: Handle the case where the user runs out of time.
+			}
+			secretCode := string(challengeInterestPlaintext.Parameters[0].ParameterValue)
+			if secretCode != challengeRequestState.challengeState.SecretCode {
+				// TODO: Handle the case where the secret code is incorrect.
+				challengeRequestState.challengeState.ChallengeState.RemainingAttempts -= 1
+			} else {
+				plaintextSuccess := ChallengeDataPlaintext{
+					Status:                ApplicationStatusCodeSuccess,
+					ChallengeStatus:       ChallengeStatusCodeSuccess,
+					IssuedCertificateName: generateCertificateName(caState),
+				}
+				encryptedSuccess := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextSuccess.Encode().Join(), requestId)
+				successEncryptedMessage := EncryptedMessage{
+					InitializationVector: encryptedSuccess.InitializationVector[:],
+					AuthenticationTag:    encryptedSuccess.AuthenticationTag[:],
+					EncryptedPayload:     encryptedSuccess.EncryptedPayload,
+				}
+				reply(successEncryptedMessage.Encode())
+				delete(caState.ChallengeRequestStateMapping, requestId)
+			}
+		}
 	}
 }

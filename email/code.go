@@ -30,9 +30,9 @@ type CodeEmail struct {
 }
 
 const (
-	Success Status = iota
-	Invalid
-	Error
+	StatusSuccess Status = iota
+	StatusInvalidEmail
+	StatusError
 )
 
 func readSmtpConfig() (*SMTPAuth, error) {
@@ -53,22 +53,22 @@ func readSmtpConfig() (*SMTPAuth, error) {
 func NewCodeEmail(e string, c string) (CodeEmail, Status, error) {
 	_, emailErr := mail.ParseAddress(e)
 	if emailErr != nil {
-		return CodeEmail{}, Invalid, fmt.Errorf("invalid email address %s: failed to match regex", e)
+		return CodeEmail{}, StatusInvalidEmail, fmt.Errorf("invalid email address %s: failed to match regex", e)
 	}
 
 	codeMatcher := regexp.MustCompile("^\\d{6}$")
 	isMatch := codeMatcher.Match([]byte(c))
 	if !isMatch {
-		return CodeEmail{}, Invalid, fmt.Errorf("invalid code %s: failed to match regex", c)
+		return CodeEmail{}, StatusInvalidEmail, fmt.Errorf("invalid code %s: failed to match regex", c)
 	}
 
-	return CodeEmail{e, c}, Success, nil
+	return CodeEmail{e, c}, StatusSuccess, nil
 }
 
 func (c CodeEmail) SendCodeEmail() (Status, error) {
 	conf, readSmtpConfigErr := readSmtpConfig()
 	if readSmtpConfigErr != nil {
-		return Error, fmt.Errorf("failed to read config file from path: %s", smtpConfigFilePath)
+		return StatusError, fmt.Errorf("failed to read config file from path: %s", smtpConfigFilePath)
 	}
 
 	address := fmt.Sprintf("%s:%d", conf.Smtp.Host, conf.Smtp.Port)
@@ -85,8 +85,8 @@ func (c CodeEmail) SendCodeEmail() (Status, error) {
 	sendMailErr := smtp.SendMail(address, auth, from, to, message)
 
 	if sendMailErr != nil {
-		return Error, fmt.Errorf("failed to send code challenge email to %s", c.ChallengeEmail)
+		return StatusError, fmt.Errorf("failed to send code challenge email to %s", c.ChallengeEmail)
 	}
 
-	return Success, nil
+	return StatusSuccess, nil
 }
