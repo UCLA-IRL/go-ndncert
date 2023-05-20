@@ -62,7 +62,7 @@ type ChallengeInterestPlaintext struct {
 type ChallengeDataPlaintext struct {
 	//+field:natural
 	Status uint64 `tlv:"0x9B"`
-	//+field:natural:optional
+	//+field:string:optional
 	ChallengeStatus string `tlv:"0xA3"`
 	//+field:name:optional
 	IssuedCertificateName enc.Name `tlv:"0xA9"` // usage: plaintext-success
@@ -74,4 +74,11 @@ type ChallengeDataPlaintext struct {
 	RemainingTime *uint64 `tlv:"0xA7"` // usage: plaintext-challenge
 	//+field:sequence:*Param:struct:Parameter:optional
 	Parameters []*Parameter `tlv:"0xC1"` // usage: plaintext-challenge
+}
+
+type ErrorMessage struct {
+	//+field:natural
+	ErrorCode uint64 `tlv:"0xAB"`
+	//+field:string
+	ErrorInfo string `tlv:"0xAD"`
 }
