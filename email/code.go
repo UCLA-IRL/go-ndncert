@@ -3,18 +3,15 @@ package email
 import (
 	"fmt"
 	"gopkg.in/yaml.v3"
-	"net/mail"
 	"net/smtp"
 	"os"
-	"regexp"
 )
 
-const smtpConfigFilePath = "../config/smtp.yml"
-const codeEmailSubjectLine = "Subject: Your NDN Email Challenge Secret Pin"
+//const codeEmailSubjectLine = "Subject: Your NDN Email Challenge Secret Pin"
 
 type Status int
 
-type SMTPAuth struct {
+type SMTPConfig struct {
 	Smtp struct {
 		Identity string `yaml:"identity"`
 		Username string `yaml:"username"`
@@ -22,11 +19,18 @@ type SMTPAuth struct {
 		Host     string `yaml:"host"`
 		Port     int64  `yaml:"port"`
 	}
+	Email struct {
+		CodeEmailBody        string `yaml:"codeEmailSubjectLine"`
+		CodeEmailSubjectLine string `yaml:"codeEmailSubjectLine"`
+	}
 }
 
-type CodeEmail struct {
-	ChallengeEmail string
-	ChallengeCode  string
+type SmtpModule struct {
+	Address              string
+	Auth                 smtp.Auth
+	CodeEmailBody        string
+	CodeEmailSubjectLine string
+	OriginEmail          string
 }
 
 const (
@@ -35,57 +39,37 @@ const (
 	StatusError
 )
 
-func readSmtpConfig() (*SMTPAuth, error) {
-	buf, err := os.ReadFile(smtpConfigFilePath)
-	if err != nil {
-		return nil, err
+func NewSmtpModule(smtpConfigFilePath string) (*SmtpModule, error) {
+	smtpConfigFileBuffer, readFileError := os.ReadFile(smtpConfigFilePath)
+	if readFileError != nil {
+		return nil, readFileError
 	}
-
-	c := &SMTPAuth{}
-	err = yaml.Unmarshal(buf, c)
-	if err != nil {
-		return nil, fmt.Errorf("in file %q: %w", smtpConfigFilePath, err)
+	smtpConfig := &SMTPConfig{}
+	smtpConfigUnmarshalError := yaml.Unmarshal(smtpConfigFileBuffer, smtpConfig)
+	if smtpConfigUnmarshalError != nil {
+		return nil, fmt.Errorf("in file %q: %w", smtpConfigFilePath, smtpConfigUnmarshalError)
 	}
-
-	return c, err
+	smtpModule := &SmtpModule{
+		Address:              fmt.Sprintf("%s:%d", smtpConfig.Smtp.Host, smtpConfig.Smtp.Port),
+		Auth:                 smtp.PlainAuth(smtpConfig.Smtp.Identity, smtpConfig.Smtp.Username, smtpConfig.Smtp.Password, smtpConfig.Smtp.Host),
+		CodeEmailBody:        smtpConfig.Email.CodeEmailBody,
+		CodeEmailSubjectLine: smtpConfig.Email.CodeEmailSubjectLine,
+		OriginEmail:          smtpConfig.Smtp.Identity,
+	}
+	return smtpModule, nil
 }
 
-func NewCodeEmail(e string, c string) (CodeEmail, Status, error) {
-	_, emailErr := mail.ParseAddress(e)
-	if emailErr != nil {
-		return CodeEmail{}, StatusInvalidEmail, fmt.Errorf("invalid email address %s: failed to match regex", e)
-	}
-
-	codeMatcher := regexp.MustCompile("^\\d{6}$")
-	isMatch := codeMatcher.Match([]byte(c))
-	if !isMatch {
-		return CodeEmail{}, StatusInvalidEmail, fmt.Errorf("invalid code %s: failed to match regex", c)
-	}
-
-	return CodeEmail{e, c}, StatusSuccess, nil
-}
-
-func (c CodeEmail) SendCodeEmail() (Status, error) {
-	conf, readSmtpConfigErr := readSmtpConfig()
-	if readSmtpConfigErr != nil {
-		return StatusError, fmt.Errorf("failed to read config file from path: %s", smtpConfigFilePath)
-	}
-
-	address := fmt.Sprintf("%s:%d", conf.Smtp.Host, conf.Smtp.Port)
-	auth := smtp.PlainAuth(conf.Smtp.Identity, conf.Smtp.Username, conf.Smtp.Password, conf.Smtp.Host)
-	from := conf.Smtp.Identity
-	to := []string{c.ChallengeEmail}
+func (smtpModule *SmtpModule) SendCodeEmail(challengeEmail string, challengeCode string) (Status, error) {
 	subject := fmt.Sprintf("From: <%s>\r\nTo: <%s>\r\n%s\r\n\r\n",
-		from,
-		to,
-		codeEmailSubjectLine)
-	body := fmt.Sprintf("Secret  PIN: %s\r\n", c.ChallengeCode)
+		smtpModule.OriginEmail,
+		[]string{challengeEmail},
+		smtpModule.CodeEmailSubjectLine)
+	body := fmt.Sprintf("%s %s\r\n", smtpModule.CodeEmailBody, challengeCode)
 	message := []byte(subject + body)
-
-	sendMailErr := smtp.SendMail(address, auth, from, to, message)
+	sendMailErr := smtp.SendMail(smtpModule.Address, smtpModule.Auth, smtpModule.OriginEmail, []string{challengeEmail}, message)
 
 	if sendMailErr != nil {
-		return StatusError, fmt.Errorf("failed to send code challenge email to %s", c.ChallengeEmail)
+		return StatusError, fmt.Errorf("failed to send code challenge email to %s", challengeEmail)
 	}
 
 	return StatusSuccess, nil

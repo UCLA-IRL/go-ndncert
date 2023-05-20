@@ -3,6 +3,7 @@ package ndncert
 import (
 	"go-ndncert/email"
 	"math/rand"
+	"net/mail"
 	"time"
 )
 
@@ -19,28 +20,29 @@ type ChallengeState struct {
 }
 
 type EmailChallengeState struct {
-	Email          string
-	SecretCode     string
-	ChallengeState *ChallengeState
+	Email      string
+	SecretCode string
 }
 
-func NewEmailChallenge(emailAddress string) (*EmailChallengeState, email.Status) {
-	var emailChallengeState = &EmailChallengeState{
-		Email:          emailAddress,
-		SecretCode:     generateSecretCode(),
-		ChallengeState: newChallengeState(),
+func NewEmailChallenge(smtpModule *email.SmtpModule, emailAddress string) (*EmailChallengeState, email.Status) {
+	_, emailErr := mail.ParseAddress(emailAddress)
+	if emailErr != nil {
+		return nil, email.StatusInvalidEmail
 	}
-	sendEmailStatus := emailChallengeState.sendEmail()
-	if sendEmailStatus != email.StatusSuccess {
-		emailChallengeState = nil
+	emailChallengeState := &EmailChallengeState{
+		Email:      emailAddress,
+		SecretCode: generateSecretCode(),
 	}
+	sendEmailStatus, _ := smtpModule.SendCodeEmail(emailChallengeState.Email, emailChallengeState.SecretCode)
 	return emailChallengeState, sendEmailStatus
 }
 
-//
-//func (e *EmailChallengeState) CheckCode(secret string) bool {
-//	return time.Now().Before(e.ChallengeState.Expiry) && secret == e.SecretCode
-//}
+func NewChallengeState() *ChallengeState {
+	return &ChallengeState{
+		RemainingAttempts: maxAttempts,
+		Expiry:            time.Now().Add(time.Second * time.Duration(secretLifetime)),
+	}
+}
 
 func generateSecretCode() string {
 	var digits = []rune("0123456789")
@@ -49,20 +51,4 @@ func generateSecretCode() string {
 		b[i] = digits[rand.Intn(len(digits))]
 	}
 	return string(b)
-}
-
-func newChallengeState() *ChallengeState {
-	return &ChallengeState{
-		RemainingAttempts: maxAttempts,
-		Expiry:            time.Now().Add(time.Second * time.Duration(secretLifetime)),
-	}
-}
-
-func (e *EmailChallengeState) sendEmail() email.Status {
-	secretEmail, status, _ := email.NewCodeEmail(e.Email, e.SecretCode)
-	if status == email.StatusSuccess {
-		sendStatus, _ := secretEmail.SendCodeEmail()
-		return sendStatus
-	}
-	return status
 }
