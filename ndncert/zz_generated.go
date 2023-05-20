@@ -1863,9 +1863,9 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 
 	if value.ChallengeStatus != nil {
 		l += 1
-		switch x := *value.ChallengeStatus; {
-		case x <= 0xff:
-			l += 2
+		switch x := len(*value.ChallengeStatus); {
+		case x <= 0xfc:
+			l += 1
 		case x <= 0xffff:
 			l += 3
 		case x <= 0xffffffff:
@@ -1873,6 +1873,7 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		default:
 			l += 9
 		}
+		l += uint(len(*value.ChallengeStatus))
 	}
 
 	if value.IssuedCertificateName != nil {
@@ -2001,24 +2002,25 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 	if value.ChallengeStatus != nil {
 		buf[pos] = byte(163)
 		pos += 1
-		switch x := *value.ChallengeStatus; {
-		case x <= 0xff:
-			buf[pos] = 1
-			buf[pos+1] = byte(x)
-			pos += 2
+		switch x := len(*value.ChallengeStatus); {
+		case x <= 0xfc:
+			buf[pos] = byte(x)
+			pos += 1
 		case x <= 0xffff:
-			buf[pos] = 2
+			buf[pos] = 0xfd
 			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
 			pos += 3
 		case x <= 0xffffffff:
-			buf[pos] = 4
+			buf[pos] = 0xfe
 			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
 			pos += 5
 		default:
-			buf[pos] = 8
+			buf[pos] = 0xff
 			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
 			pos += 9
 		}
+		copy(buf[pos:], *value.ChallengeStatus)
+		pos += uint(len(*value.ChallengeStatus))
 	}
 
 	if value.IssuedCertificateName != nil {
@@ -2220,22 +2222,12 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 				if progress+1 == 1 {
 					handled = true
 					{
-						tempVal := uint64(0)
-						tempVal = uint64(0)
-						{
-							for i := 0; i < int(l); i++ {
-								x := byte(0)
-								x, err = reader.ReadByte()
-								if err != nil {
-									if err == io.EOF {
-										err = io.ErrUnexpectedEOF
-									}
-									break
-								}
-								tempVal = uint64(tempVal<<8) | uint64(x)
-							}
+						var builder strings.Builder
+						_, err = io.CopyN(&builder, reader, int64(l))
+						if err == nil {
+							tempStr := builder.String()
+							value.ChallengeStatus = &tempStr
 						}
-						value.ChallengeStatus = &tempVal
 					}
 
 				}
@@ -2422,6 +2414,214 @@ func (value *ChallengeDataPlaintext) Bytes() []byte {
 
 func ParseChallengeDataPlaintext(reader enc.ParseReader, ignoreCritical bool) (*ChallengeDataPlaintext, error) {
 	context := ChallengeDataPlaintextParsingContext{}
+	context.Init()
+	return context.Parse(reader, ignoreCritical)
+}
+
+type ErrorMessageEncoder struct {
+	length uint
+}
+
+type ErrorMessageParsingContext struct {
+}
+
+func (encoder *ErrorMessageEncoder) Init(value *ErrorMessage) {
+
+	l := uint(0)
+	l += 1
+	switch x := value.ErrorCode; {
+	case x <= 0xff:
+		l += 2
+	case x <= 0xffff:
+		l += 3
+	case x <= 0xffffffff:
+		l += 5
+	default:
+		l += 9
+	}
+
+	l += 1
+	switch x := len(value.ErrorInfo); {
+	case x <= 0xfc:
+		l += 1
+	case x <= 0xffff:
+		l += 3
+	case x <= 0xffffffff:
+		l += 5
+	default:
+		l += 9
+	}
+	l += uint(len(value.ErrorInfo))
+
+	encoder.length = l
+
+}
+
+func (context *ErrorMessageParsingContext) Init() {
+
+}
+
+func (encoder *ErrorMessageEncoder) EncodeInto(value *ErrorMessage, buf []byte) {
+
+	pos := uint(0)
+	buf[pos] = byte(171)
+	pos += 1
+	switch x := value.ErrorCode; {
+	case x <= 0xff:
+		buf[pos] = 1
+		buf[pos+1] = byte(x)
+		pos += 2
+	case x <= 0xffff:
+		buf[pos] = 2
+		binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+		pos += 3
+	case x <= 0xffffffff:
+		buf[pos] = 4
+		binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+		pos += 5
+	default:
+		buf[pos] = 8
+		binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+		pos += 9
+	}
+
+	buf[pos] = byte(173)
+	pos += 1
+	switch x := len(value.ErrorInfo); {
+	case x <= 0xfc:
+		buf[pos] = byte(x)
+		pos += 1
+	case x <= 0xffff:
+		buf[pos] = 0xfd
+		binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+		pos += 3
+	case x <= 0xffffffff:
+		buf[pos] = 0xfe
+		binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+		pos += 5
+	default:
+		buf[pos] = 0xff
+		binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+		pos += 9
+	}
+	copy(buf[pos:], value.ErrorInfo)
+	pos += uint(len(value.ErrorInfo))
+
+}
+
+func (encoder *ErrorMessageEncoder) Encode(value *ErrorMessage) enc.Wire {
+
+	wire := make(enc.Wire, 1)
+	wire[0] = make([]byte, encoder.length)
+	buf := wire[0]
+	encoder.EncodeInto(value, buf)
+
+	return wire
+}
+
+func (context *ErrorMessageParsingContext) Parse(reader enc.ParseReader, ignoreCritical bool) (*ErrorMessage, error) {
+	if reader == nil {
+		return nil, enc.ErrBufferOverflow
+	}
+	progress := -1
+	value := &ErrorMessage{}
+	var err error
+	var startPos int
+	for {
+		startPos = reader.Pos()
+		if startPos >= reader.Length() {
+			break
+		}
+		typ := enc.TLNum(0)
+		l := enc.TLNum(0)
+		typ, err = enc.ReadTLNum(reader)
+		if err != nil {
+			return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
+		}
+		l, err = enc.ReadTLNum(reader)
+		if err != nil {
+			return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
+		}
+		err = nil
+		for handled := false; !handled; progress++ {
+			switch typ {
+			case 171:
+				if progress+1 == 0 {
+					handled = true
+					value.ErrorCode = uint64(0)
+					{
+						for i := 0; i < int(l); i++ {
+							x := byte(0)
+							x, err = reader.ReadByte()
+							if err != nil {
+								if err == io.EOF {
+									err = io.ErrUnexpectedEOF
+								}
+								break
+							}
+							value.ErrorCode = uint64(value.ErrorCode<<8) | uint64(x)
+						}
+					}
+				}
+			case 173:
+				if progress+1 == 1 {
+					handled = true
+					{
+						var builder strings.Builder
+						_, err = io.CopyN(&builder, reader, int64(l))
+						if err == nil {
+							value.ErrorInfo = builder.String()
+						}
+					}
+
+				}
+			default:
+				handled = true
+				if !ignoreCritical && ((typ <= 31) || ((typ & 1) == 1)) {
+					return nil, enc.ErrUnrecognizedField{TypeNum: typ}
+				}
+				err = reader.Skip(int(l))
+			}
+			if err == nil && !handled {
+				switch progress {
+				case 0 - 1:
+					err = enc.ErrSkipRequired{Name: "ErrorCode", TypeNum: 171}
+				case 1 - 1:
+					err = enc.ErrSkipRequired{Name: "ErrorInfo", TypeNum: 173}
+				}
+			}
+			if err != nil {
+				return nil, enc.ErrFailToParse{TypeNum: typ, Err: err}
+			}
+		}
+	}
+	startPos = reader.Pos()
+	for ; progress < 2; progress++ {
+		switch progress {
+		case 0 - 1:
+			err = enc.ErrSkipRequired{Name: "ErrorCode", TypeNum: 171}
+		case 1 - 1:
+			err = enc.ErrSkipRequired{Name: "ErrorInfo", TypeNum: 173}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func (value *ErrorMessage) Encode() enc.Wire {
+	encoder := ErrorMessageEncoder{}
+	encoder.Init(value)
+	return encoder.Encode(value)
+}
+
+func (value *ErrorMessage) Bytes() []byte {
+	return value.Encode().Join()
+}
+
+func ParseErrorMessage(reader enc.ParseReader, ignoreCritical bool) (*ErrorMessage, error) {
+	context := ErrorMessageParsingContext{}
 	context.Init()
 	return context.Parse(reader, ignoreCritical)
 }
