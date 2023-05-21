@@ -235,7 +235,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 }
 
 func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
-	newInterest, _ := ndncert.ParseNewInterest(enc.NewWireReader(interest.AppParam()), true)
+	newInterest, _ := ndncert.ParseNewInterestAppParameters(enc.NewWireReader(interest.AppParam()), true)
 	certRequestData, _, _ := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
@@ -252,11 +252,9 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	requestId := getRequestId(caState)
 
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
-		requestId:     requestId,
-		status:        ChallengeStatusNewInterestReceived,
-		encryptionKey: ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt)),
-		//encryptionIv:        nil,
-		//decryptionIv:        nil,
+		requestId:           requestId,
+		status:              ChallengeStatusNewInterestReceived,
+		encryptionKey:       ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt)),
 		challengeType:       TbdChallengeType,
 		challengeState:      nil,
 		emailChallengeState: nil,
@@ -409,10 +407,10 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 }
 
-func getEcdhState(newInterest *ndncert.NewInterest) crypto.ECDHState {
+func getEcdhState(newInterestAppParameters *ndncert.NewInterestAppParameters) crypto.ECDHState {
 	ecdhState := crypto.ECDHState{}
 	ecdhState.GenerateKeyPair()
-	ecdhState.SetRemotePublicKey(newInterest.EcdhPub)
+	ecdhState.SetRemotePublicKey(newInterestAppParameters.EcdhPub)
 	return ecdhState
 }
 

@@ -681,14 +681,14 @@ func ParseCaProfile(reader enc.ParseReader, ignoreCritical bool) (*CaProfile, er
 	return context.Parse(reader, ignoreCritical)
 }
 
-type NewInterestEncoder struct {
+type NewInterestAppParametersEncoder struct {
 	length uint
 }
 
-type NewInterestParsingContext struct {
+type NewInterestAppParametersParsingContext struct {
 }
 
-func (encoder *NewInterestEncoder) Init(value *NewInterest) {
+func (encoder *NewInterestAppParametersEncoder) Init(value *NewInterestAppParameters) {
 
 	l := uint(0)
 	if value.EcdhPub != nil {
@@ -725,11 +725,11 @@ func (encoder *NewInterestEncoder) Init(value *NewInterest) {
 
 }
 
-func (context *NewInterestParsingContext) Init() {
+func (context *NewInterestAppParametersParsingContext) Init() {
 
 }
 
-func (encoder *NewInterestEncoder) EncodeInto(value *NewInterest, buf []byte) {
+func (encoder *NewInterestAppParametersEncoder) EncodeInto(value *NewInterestAppParameters, buf []byte) {
 
 	pos := uint(0)
 	if value.EcdhPub != nil {
@@ -782,7 +782,7 @@ func (encoder *NewInterestEncoder) EncodeInto(value *NewInterest, buf []byte) {
 
 }
 
-func (encoder *NewInterestEncoder) Encode(value *NewInterest) enc.Wire {
+func (encoder *NewInterestAppParametersEncoder) Encode(value *NewInterestAppParameters) enc.Wire {
 
 	wire := make(enc.Wire, 1)
 	wire[0] = make([]byte, encoder.length)
@@ -792,12 +792,12 @@ func (encoder *NewInterestEncoder) Encode(value *NewInterest) enc.Wire {
 	return wire
 }
 
-func (context *NewInterestParsingContext) Parse(reader enc.ParseReader, ignoreCritical bool) (*NewInterest, error) {
+func (context *NewInterestAppParametersParsingContext) Parse(reader enc.ParseReader, ignoreCritical bool) (*NewInterestAppParameters, error) {
 	if reader == nil {
 		return nil, enc.ErrBufferOverflow
 	}
 	progress := -1
-	value := &NewInterest{}
+	value := &NewInterestAppParameters{}
 	var err error
 	var startPos int
 	for {
@@ -867,18 +867,18 @@ func (context *NewInterestParsingContext) Parse(reader enc.ParseReader, ignoreCr
 	return value, nil
 }
 
-func (value *NewInterest) Encode() enc.Wire {
-	encoder := NewInterestEncoder{}
+func (value *NewInterestAppParameters) Encode() enc.Wire {
+	encoder := NewInterestAppParametersEncoder{}
 	encoder.Init(value)
 	return encoder.Encode(value)
 }
 
-func (value *NewInterest) Bytes() []byte {
+func (value *NewInterestAppParameters) Bytes() []byte {
 	return value.Encode().Join()
 }
 
-func ParseNewInterest(reader enc.ParseReader, ignoreCritical bool) (*NewInterest, error) {
-	context := NewInterestParsingContext{}
+func ParseNewInterestAppParameters(reader enc.ParseReader, ignoreCritical bool) (*NewInterestAppParameters, error) {
+	context := NewInterestAppParametersParsingContext{}
 	context.Init()
 	return context.Parse(reader, ignoreCritical)
 }
@@ -1533,7 +1533,7 @@ func (encoder *ChallengeInterestPlaintextEncoder) Init(value *ChallengeInterestP
 		for i := 0; i < Parameters_l; i++ {
 			pseudoEncoder := &encoder.Parameters_subencoder[i]
 			pseudoValue := struct {
-				Parameters *Param
+				Parameters *Parameter
 			}{
 				Parameters: value.Parameters[i],
 			}
@@ -1567,7 +1567,7 @@ func (encoder *ChallengeInterestPlaintextEncoder) Init(value *ChallengeInterestP
 		for seq_i, seq_v := range value.Parameters {
 			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
 			pseudoValue := struct {
-				Parameters *Param
+				Parameters *Parameter
 			}{
 				Parameters: seq_v,
 			}
@@ -1633,7 +1633,7 @@ func (encoder *ChallengeInterestPlaintextEncoder) EncodeInto(value *ChallengeInt
 		for seq_i, seq_v := range value.Parameters {
 			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
 			pseudoValue := struct {
-				Parameters *Param
+				Parameters *Parameter
 			}{
 				Parameters: seq_v,
 			}
@@ -1726,11 +1726,11 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 				if progress+1 == 1 {
 					handled = true
 					if value.Parameters == nil {
-						value.Parameters = make([]*Param, 0)
+						value.Parameters = make([]*Parameter, 0)
 					}
 					{
 						pseudoValue := struct {
-							Parameters *Param
+							Parameters *Parameter
 						}{}
 						{
 							value := &pseudoValue
@@ -1832,7 +1832,7 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		for i := 0; i < Parameters_l; i++ {
 			pseudoEncoder := &encoder.Parameters_subencoder[i]
 			pseudoValue := struct {
-				Parameters *Param
+				Parameters *Parameter
 			}{
 				Parameters: value.Parameters[i],
 			}
@@ -1861,20 +1861,18 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		l += 9
 	}
 
-	if value.ChallengeStatus != nil {
+	l += 1
+	switch x := len(value.ChallengeStatus); {
+	case x <= 0xfc:
 		l += 1
-		switch x := len(*value.ChallengeStatus); {
-		case x <= 0xfc:
-			l += 1
-		case x <= 0xffff:
-			l += 3
-		case x <= 0xffffffff:
-			l += 5
-		default:
-			l += 9
-		}
-		l += uint(len(*value.ChallengeStatus))
+	case x <= 0xffff:
+		l += 3
+	case x <= 0xffffffff:
+		l += 5
+	default:
+		l += 9
 	}
+	l += uint(len(value.ChallengeStatus))
 
 	if value.IssuedCertificateName != nil {
 		l += 1
@@ -1938,7 +1936,7 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		for seq_i, seq_v := range value.Parameters {
 			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
 			pseudoValue := struct {
-				Parameters *Param
+				Parameters *Parameter
 			}{
 				Parameters: seq_v,
 			}
@@ -1999,29 +1997,27 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 		pos += 9
 	}
 
-	if value.ChallengeStatus != nil {
-		buf[pos] = byte(163)
+	buf[pos] = byte(163)
+	pos += 1
+	switch x := len(value.ChallengeStatus); {
+	case x <= 0xfc:
+		buf[pos] = byte(x)
 		pos += 1
-		switch x := len(*value.ChallengeStatus); {
-		case x <= 0xfc:
-			buf[pos] = byte(x)
-			pos += 1
-		case x <= 0xffff:
-			buf[pos] = 0xfd
-			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-			pos += 3
-		case x <= 0xffffffff:
-			buf[pos] = 0xfe
-			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-			pos += 5
-		default:
-			buf[pos] = 0xff
-			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-			pos += 9
-		}
-		copy(buf[pos:], *value.ChallengeStatus)
-		pos += uint(len(*value.ChallengeStatus))
+	case x <= 0xffff:
+		buf[pos] = 0xfd
+		binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+		pos += 3
+	case x <= 0xffffffff:
+		buf[pos] = 0xfe
+		binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+		pos += 5
+	default:
+		buf[pos] = 0xff
+		binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+		pos += 9
 	}
+	copy(buf[pos:], value.ChallengeStatus)
+	pos += uint(len(value.ChallengeStatus))
 
 	if value.IssuedCertificateName != nil {
 		buf[pos] = byte(169)
@@ -2123,7 +2119,7 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 		for seq_i, seq_v := range value.Parameters {
 			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
 			pseudoValue := struct {
-				Parameters *Param
+				Parameters *Parameter
 			}{
 				Parameters: seq_v,
 			}
@@ -2225,8 +2221,7 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 						var builder strings.Builder
 						_, err = io.CopyN(&builder, reader, int64(l))
 						if err == nil {
-							tempStr := builder.String()
-							value.ChallengeStatus = &tempStr
+							value.ChallengeStatus = builder.String()
 						}
 					}
 
@@ -2331,11 +2326,11 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 				if progress+1 == 6 {
 					handled = true
 					if value.Parameters == nil {
-						value.Parameters = make([]*Param, 0)
+						value.Parameters = make([]*Parameter, 0)
 					}
 					{
 						pseudoValue := struct {
-							Parameters *Param
+							Parameters *Parameter
 						}{}
 						{
 							value := &pseudoValue
@@ -2359,7 +2354,7 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 				case 0 - 1:
 					err = enc.ErrSkipRequired{Name: "Status", TypeNum: 155}
 				case 1 - 1:
-					value.ChallengeStatus = nil
+					err = enc.ErrSkipRequired{Name: "ChallengeStatus", TypeNum: 163}
 				case 2 - 1:
 					value.IssuedCertificateName = nil
 				case 3 - 1:
@@ -2383,7 +2378,7 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 		case 0 - 1:
 			err = enc.ErrSkipRequired{Name: "Status", TypeNum: 155}
 		case 1 - 1:
-			value.ChallengeStatus = nil
+			err = enc.ErrSkipRequired{Name: "ChallengeStatus", TypeNum: 163}
 		case 2 - 1:
 			value.IssuedCertificateName = nil
 		case 3 - 1:

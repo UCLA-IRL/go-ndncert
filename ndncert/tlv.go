@@ -25,7 +25,7 @@ type CaProfile struct {
 	CaCertificate enc.Wire `tlv:"0x89"`
 }
 
-type NewInterest struct {
+type NewInterestAppParameters struct {
 	//+field:binary
 	EcdhPub []byte `tlv:"0x91"`
 	//+field:binary
@@ -55,14 +55,14 @@ type EncryptedMessage struct {
 type ChallengeInterestPlaintext struct {
 	//+field:string
 	SelectedChallenge string `tlv:"0xA1"`
-	//+field:sequence:*Param:struct:Parameter
+	//+field:sequence:*Parameter:struct:Parameter
 	Parameters []*Parameter `tlv:"0xC1"`
 }
 
 type ChallengeDataPlaintext struct {
 	//+field:natural
 	Status uint64 `tlv:"0x9B"`
-	//+field:string:optional
+	//+field:string
 	ChallengeStatus string `tlv:"0xA3"`
 	//+field:name:optional
 	IssuedCertificateName enc.Name `tlv:"0xA9"` // usage: plaintext-success
@@ -72,7 +72,7 @@ type ChallengeDataPlaintext struct {
 	RemainingTries *uint64 `tlv:"0xA5"` // usage: plaintext-challenge
 	//+field:natural:optional
 	RemainingTime *uint64 `tlv:"0xA7"` // usage: plaintext-challenge
-	//+field:sequence:*Param:struct:Parameter:optional
+	//+field:sequence:*Parameter:struct:Parameter:optional
 	Parameters []*Parameter `tlv:"0xC1"` // usage: plaintext-challenge
 }
 

@@ -3,13 +3,19 @@ package main
 import (
 	"fmt"
 	"github.com/apex/log"
+	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	basic_engine "github.com/zjkmxy/go-ndn/pkg/engine/basic"
+	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"go-ndncert/ndncert/client"
 	"os"
 	"os/signal"
 	"syscall"
 )
+
+func passAll(enc.Name, enc.Wire, ndn.Signature) bool {
+	return true
+}
 
 func main() {
 	log.SetLevel(log.DebugLevel)
@@ -32,12 +38,14 @@ func main() {
 	fmt.Scan(&caPrefix)
 	requesterState.ExpressNewInterest(ndnEngine)
 	for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {
+		var emailAddress string
 		fmt.Print("Enter the email address you wish to send the secret code to: ")
 		fmt.Scan(&emailAddress)
+		requesterState.ExpressEmailChoiceChallenge(ndnEngine, emailAddress)
 	}
-	fmt.Print("Enter the secret code you received from your email: ")
 
-	requesterState := client.NewRequesterState()
+	fmt.Print("Enter the secret code you received from your email: ")
+	//_ := client.NewRequesterState(/*)*/
 
 	// Wait for keyboard quit signal
 	sigChannel := make(chan os.Signal, 1)

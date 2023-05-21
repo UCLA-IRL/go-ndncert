@@ -21,6 +21,7 @@ const (
 	ChallengeStatusBeforeChallenge ChallengeStatus = iota
 	ChallengeStatusAfterNewData
 	ChallengeStatusAfterSelectionChallengeData
+	ChallengeStatusFailure
 )
 
 type RequesterState struct {
@@ -45,7 +46,7 @@ func NewRequesterState(caPrefix string) *RequesterState {
 
 func (requesterState *RequesterState) ExpressNewInterest(ndnEngine ndn.Engine) error {
 	newInterestName, _ := enc.NameFromStr(requesterState.caPrefix + "/" + server.PrefixNew)
-	newInterestAppParameters := ndncert.NewInterest{
+	newInterestAppParameters := ndncert.NewInterestAppParameters{
 		EcdhPub:     requesterState.ecdhState.PublicKey.Bytes(),
 		CertRequest: nil,
 	}
