@@ -1,4 +1,4 @@
-package ndncert
+package server
 
 import (
 	"crypto/rand"
@@ -9,9 +9,11 @@ import (
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
 	"github.com/zjkmxy/go-ndn/pkg/schema"
+	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"github.com/zjkmxy/go-ndn/pkg/utils"
 	"go-ndncert/crypto"
 	"go-ndncert/email"
+	"go-ndncert/ndncert"
 	"go.step.sm/crypto/randutil"
 	"golang.org/x/exp/slices"
 	"gopkg.in/yaml.v3"
@@ -30,7 +32,7 @@ type ErrorReason []byte
 type RequestId [RequestIdLength]byte
 
 const (
-	PrefixInfo      string = "/CA/NEW"
+	PrefixInfo      string = "/CA/INFO"
 	PrefixNew              = "/CA/NEW"
 	PrefixChallenge        = "/CA/CHALLENGE"
 )
@@ -89,6 +91,15 @@ const (
 )
 
 const (
+	SelectedChallengeEmail string = "email"
+)
+
+const (
+	ParameterKeyEmail string = "email"
+	ParameterKeyCode         = "code"
+)
+
+const (
 	ChallengeStatusNewInterestReceived ChallengeStatus = iota
 	ChallengeStatusChallengeIssued
 	// ChallengeStatusChallengeInterestReceived
@@ -123,7 +134,7 @@ const (
 	// NoAvailableNamesErr           = "No Available Names: the CA finds there is no namespaces available based on the PROBE parameters provided." // Currently unused (no support for PROBE)
 )
 
-var AvailableChallenges = []string{"email"}
+var AvailableChallenges = []string{SelectedChallengeEmail}
 var ErrorCodeMapping = map[ErrorCode]string{
 	ErrorCodeBadInterestFormat: ErrorReasonBadInterestFormat,
 	ErrorCodeBadParameter:      ErrorReasonBadParameterFormat,
@@ -147,8 +158,6 @@ type ChallengeRequestState struct {
 	requestId           RequestId
 	status              ChallengeStatus
 	encryptionKey       [16]byte
-	encryptionIv        []byte
-	decryptionIv        []byte
 	challengeType       ChallengeType
 	emailChallengeState *EmailChallengeState
 	challengeState      *ChallengeState
@@ -191,7 +200,7 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	// Set up INFO route
 	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
-	caProfile := CaProfile{
+	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
 		CaInfo:         caState.CaInfo,
 		ParameterKey:   []string{},
@@ -226,7 +235,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 }
 
 func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
-	newInterest, _ := ParseNewInterest(enc.NewWireReader(interest.AppParam()), true)
+	newInterest, _ := ndncert.ParseNewInterest(enc.NewWireReader(interest.AppParam()), true)
 	certRequestData, _, _ := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
@@ -243,18 +252,18 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	requestId := getRequestId(caState)
 
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
-		requestId:           requestId,
-		status:              ChallengeStatusNewInterestReceived,
-		encryptionKey:       ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt)),
-		encryptionIv:        nil,
-		decryptionIv:        nil,
+		requestId:     requestId,
+		status:        ChallengeStatusNewInterestReceived,
+		encryptionKey: ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt)),
+		//encryptionIv:        nil,
+		//decryptionIv:        nil,
 		challengeType:       TbdChallengeType,
 		challengeState:      nil,
 		emailChallengeState: nil,
 		clientPublicKey:     certRequestData.Content().Join(),
 	}
 
-	newData := NewData{
+	newData := ndncert.NewData{
 		EcdhPub:   ecdhState.PublicKey.Bytes(),
 		Salt:      salt,
 		RequestId: requestId[:],
@@ -274,7 +283,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 
 	requestId := (RequestId)([]byte(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
 	encryptedMessageReader := enc.NewWireReader(interest.AppParam())
-	encryptedMessage, _ := ParseEncryptedMessage(encryptedMessageReader, true)
+	encryptedMessage, _ := ndncert.ParseEncryptedMessage(encryptedMessageReader, true)
 	initializationVector := ([crypto.NonceSizeBytes]byte)(encryptedMessage.InitializationVector)
 	authenticationTag := ([crypto.TagSizeBytes]byte)(encryptedMessage.AuthenticationTag)
 	encryptedMessageObject := crypto.EncryptedMessage{
@@ -289,7 +298,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 
 	plaintext := crypto.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
-	challengeInterestPlaintext, _ := ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
+	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
 
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
@@ -297,10 +306,10 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 
 	switch {
-	case challengeInterestPlaintext.SelectedChallenge == "email":
+	case challengeInterestPlaintext.SelectedChallenge == SelectedChallengeEmail:
 		switch challengeRequestState.status {
 		case ChallengeStatusNewInterestReceived:
-			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != "email" {
+			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != ParameterKeyEmail {
 				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 				return
 			}
@@ -318,14 +327,14 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					delete(caState.ChallengeRequestStateMapping, requestId)
 					return
 				}
-				plaintextChallenge := ChallengeDataPlaintext{
+				plaintextChallenge := ndncert.ChallengeDataPlaintext{
 					Status:          ApplicationStatusCodeChallenge,
 					ChallengeStatus: ChallengeStatusCodeInvalidEmail,
 					RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 					RemainingTime:   &remainingTimeUint64,
 				}
 				encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
-				challengeEncryptedMessage := EncryptedMessage{
+				challengeEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedChallenge.InitializationVector[:],
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
 					EncryptedPayload:     encryptedChallenge.EncryptedPayload,
@@ -334,14 +343,14 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				return
 			}
 			challengeRequestState.status = ChallengeStatusChallengeIssued
-			plaintextChallenge := ChallengeDataPlaintext{
+			plaintextChallenge := ndncert.ChallengeDataPlaintext{
 				Status:          ApplicationStatusCodeChallenge,
 				ChallengeStatus: ChallengeStatusCodeNeedCode,
 				RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 				RemainingTime:   &remainingTimeUint64,
 			}
 			encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
-			challengeEncryptedMessage := EncryptedMessage{
+			challengeEncryptedMessage := ndncert.EncryptedMessage{
 				InitializationVector: encryptedChallenge.InitializationVector[:],
 				AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
 				EncryptedPayload:     encryptedChallenge.EncryptedPayload,
@@ -349,7 +358,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 			challengeRequestState.emailChallengeState = emailChallengeState
 			replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply)
 		case ChallengeStatusChallengeIssued:
-			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != "code" {
+			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != ParameterKeyCode {
 				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 				return
 			}
@@ -367,14 +376,14 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					delete(caState.ChallengeRequestStateMapping, requestId)
 					return
 				}
-				plaintextChallenge := ChallengeDataPlaintext{
+				plaintextChallenge := ndncert.ChallengeDataPlaintext{
 					Status:          ApplicationStatusCodeChallenge,
 					ChallengeStatus: ChallengeStatusWrongCode,
 					RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 					RemainingTime:   &remainingTimeUint64,
 				}
 				encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
-				challengeEncryptedMessage := EncryptedMessage{
+				challengeEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedChallenge.InitializationVector[:],
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
 					EncryptedPayload:     encryptedChallenge.EncryptedPayload,
@@ -382,13 +391,13 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply)
 				return
 			} else {
-				plaintextSuccess := ChallengeDataPlaintext{
+				plaintextSuccess := ndncert.ChallengeDataPlaintext{
 					Status:                ApplicationStatusCodeSuccess,
 					ChallengeStatus:       ChallengeStatusCodeSuccess,
 					IssuedCertificateName: generateCertificateName(caState),
 				}
 				encryptedSuccess := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextSuccess.Encode().Join(), requestId)
-				successEncryptedMessage := EncryptedMessage{
+				successEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedSuccess.InitializationVector[:],
 					AuthenticationTag:    encryptedSuccess.AuthenticationTag[:],
 					EncryptedPayload:     encryptedSuccess.EncryptedPayload,
@@ -400,7 +409,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 }
 
-func getEcdhState(newInterest *NewInterest) crypto.ECDHState {
+func getEcdhState(newInterest *ndncert.NewInterest) crypto.ECDHState {
 	ecdhState := crypto.ECDHState{}
 	ecdhState.GenerateKeyPair()
 	ecdhState.SetRemotePublicKey(newInterest.EcdhPub)
@@ -429,7 +438,7 @@ func generateCertificateName(caState *CaState) enc.Name {
 }
 
 func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyFunc) {
-	errorMessageContent := ErrorMessage{
+	errorMessageContent := ndncert.ErrorMessage{
 		ErrorCode: uint64(errorCode),
 		ErrorInfo: ErrorCodeMapping[errorCode],
 	}
@@ -439,7 +448,7 @@ func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyF
 			ContentType: utils.IdPtr(ndn.ContentTypeBlob),
 		},
 		errorMessageContent.Encode(),
-		nil)
+		sec.NewSha256Signer())
 	if makeDataError != nil {
 		// TODO - handle error making error data packet.
 		return
@@ -455,7 +464,7 @@ func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc
 			Freshness:   utils.IdPtr(4 * time.Second),
 		},
 		dataWire,
-		nil)
+		sec.NewSha256Signer())
 	if makeDataError != nil {
 		// TODO - handle error making data packet
 		return

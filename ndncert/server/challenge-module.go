@@ -1,4 +1,4 @@
-package ndncert
+package server
 
 import (
 	"go-ndncert/email"
@@ -10,8 +10,8 @@ import (
 var maxAttempts uint64 = 3
 
 const (
-	secretLifetime int64 = 300 // in seconds
-	secretLength   int   = 6
+	secretLifetime   int64 = 300 // in seconds
+	SecretCodeLength int   = 6
 )
 
 type ChallengeState struct {
@@ -46,7 +46,7 @@ func NewChallengeState() *ChallengeState {
 
 func generateSecretCode() string {
 	var digits = []rune("0123456789")
-	b := make([]rune, secretLength)
+	b := make([]rune, SecretCodeLength)
 	for i := range b {
 		b[i] = digits[rand.Intn(len(digits))]
 	}
