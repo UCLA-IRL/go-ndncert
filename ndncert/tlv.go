@@ -5,13 +5,6 @@ import (
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 )
 
-type Parameter struct {
-	//+field:string
-	ParameterKey string `tlv:"0x85"`
-	//+field:binary
-	ParameterValue []byte `tlv:"0x87"`
-}
-
 type CaProfile struct {
 	//+field:name
 	CaPrefix enc.Name `tlv:"0x81"`
@@ -55,8 +48,8 @@ type EncryptedMessage struct {
 type ChallengeInterestPlaintext struct {
 	//+field:string
 	SelectedChallenge string `tlv:"0xA1"`
-	//+field:sequence:*Parameter:struct:Parameter
-	Parameters []*Parameter `tlv:"0xC1"`
+	//+field:map:string:string:0x87:[]byte:binary
+	Parameters map[string][]byte `tlv:"0x85"`
 }
 
 type ChallengeDataPlaintext struct {
@@ -72,8 +65,8 @@ type ChallengeDataPlaintext struct {
 	RemainingTries *uint64 `tlv:"0xA5"` // usage: plaintext-challenge
 	//+field:natural:optional
 	RemainingTime *uint64 `tlv:"0xA7"` // usage: plaintext-challenge
-	//+field:sequence:*Parameter:struct:Parameter:optional
-	Parameters []*Parameter `tlv:"0xC1"` // usage: plaintext-challenge
+	//+field:map:string:string:0x87:[]byte:binary
+	Parameters map[string][]byte `tlv:"0x85"` // usage: plaintext-challenge
 }
 
 type ErrorMessage struct {

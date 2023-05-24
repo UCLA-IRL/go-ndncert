@@ -4,11 +4,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"github.com/apex/log"
 	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
 	"github.com/zjkmxy/go-ndn/pkg/schema"
+	_ "github.com/zjkmxy/go-ndn/pkg/schema/rdr"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"github.com/zjkmxy/go-ndn/pkg/utils"
 	"go-ndncert/crypto"
@@ -149,7 +151,7 @@ var ErrorCodeMapping = map[ErrorCode]string{
 type CaConfig struct {
 	Ca struct {
 		Name                         string `yaml:"name"`
-		Info                         string `yaml:"name"`
+		Info                         string `yaml:"info"`
 		MaxCertificateValidityPeriod uint64 `yaml:"maxCertificateValidityPeriod"`
 	}
 }
@@ -177,13 +179,17 @@ type CaState struct {
 const negativeRequestIdOffset = -2
 
 func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState, error) {
+	logger := log.WithField("module", "ca")
+	logger.Infof("Generating a new Ca State with config file path: %s", caConfigFilePath)
 	caDetailsConfigFileBuffer, readFileError := os.ReadFile(caConfigFilePath)
 	if readFileError != nil {
+		logger.Fatalf("Failed to generate new Ca State due to file read error on file path: %s", caConfigFilePath)
 		return nil, readFileError
 	}
 	caDetails := &CaConfig{}
 	caDetailsUnmarshalError := yaml.Unmarshal(caDetailsConfigFileBuffer, caDetails)
 	if caDetailsUnmarshalError != nil {
+		logger.Fatal("Failed to generate new Ca State due to yaml unmarshalling error")
 		return nil, fmt.Errorf("in file %q: %w", caDetailsConfigFileBuffer, caDetailsUnmarshalError)
 	}
 	caState := &CaState{
@@ -198,8 +204,11 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 }
 
 func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
+	logger := log.WithField("module", "ca")
+
 	// Set up INFO route
 	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
+	logger.Infof("Setting up routing with ca prefix name: %s", caPrefixName)
 	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
 		CaInfo:         caState.CaInfo,
@@ -208,25 +217,29 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 		CaCertificate:  caState.CaCert,
 	}
 
-	infoPrefix, _ := enc.NameFromStr(caState.CaPrefix + "/" + PrefixInfo)
+	infoPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixInfo)
+	logger.Infof("Initializing INFO route on %s", infoPrefix.String())
 	ntSchema := schema.CreateFromJson(SchemaJson, map[string]any{})
 	ntSchemaAttachError := ntSchema.Attach(infoPrefix, ndnEngine)
 	if ntSchemaAttachError != nil {
+		logger.Fatal("Failed to initialize INFO route: ntSchema attach error")
 		return ntSchemaAttachError
 	}
 	defer ntSchema.Detach()
 	matchedNode := ntSchema.Root().Apply(enc.Matching{})
 	version := matchedNode.Call("Provide", enc.Wire{caProfile.Encode().Join()})
-	fmt.Printf("Generated CA Profile Packet with version= %d\n", version)
+	logger.Infof("Generated CA Profile Packet with version=%d", version)
 
 	// Set up NEW route
-	newPrefix, _ := enc.NameFromStr(caState.CaPrefix + "/" + PrefixNew)
+	newPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixNew)
+	logger.Infof("Setting up NEW route on %s", newPrefix.String())
 	ndnEngine.AttachHandler(newPrefix, func(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 		caState.OnNew(interest, rawInterest, sigCovered, reply, deadline)
 	})
 
 	// Set up CHALLENGE route
-	challengePrefix, _ := enc.NameFromStr(caState.CaPrefix + "/" + PrefixChallenge)
+	challengePrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixChallenge)
+	logger.Infof("Setting up CHALLENGE route on %s", challengePrefix.String())
 	ndnEngine.AttachHandler(challengePrefix, func(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 		caState.OnChallenge(interest, rawInterest, sigCovered, reply, deadline)
 	})
@@ -235,10 +248,13 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 }
 
 func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
+	logger := log.WithField("module", "ca")
+	logger.Infof("Handling incoming NEW Interest with name: %s", interest.Name().String())
 	newInterest, _ := ndncert.ParseNewInterestAppParameters(enc.NewWireReader(interest.AppParam()), true)
 	certRequestData, _, _ := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+		logger.Error("Bad NEW interest received: content type is not KEY type")
 		return
 	}
 
@@ -273,8 +289,12 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 }
 
 func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
+	logger := log.WithField("module", "ca")
 	nameComponents := strings.Split(interest.Name().String(), "/")
 	if len(nameComponents[len(nameComponents)+negativeRequestIdOffset]) != RequestIdLength {
+		logger.Errorf(
+			"Bad CHALLENGE interest received due request id length, should be %d but is %d",
+			RequestIdLength, len(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
 		replyWithError(ErrorCodeBadInterestFormat, interest.Name(), reply)
 		return
 	}
@@ -291,6 +311,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 	challengeRequestState, ok := caState.ChallengeRequestStateMapping[requestId]
 	if !ok {
+		logger.Error("Bad CHALLENGE interest received: invalid request id detected")
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 		return
 	}
@@ -299,6 +320,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
 
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
+		logger.Error("Bad CHALLENGE interest received: invalid selected challenge detected")
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 		return
 	}
@@ -307,21 +329,28 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	case challengeInterestPlaintext.SelectedChallenge == SelectedChallengeEmail:
 		switch challengeRequestState.status {
 		case ChallengeStatusNewInterestReceived:
-			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != ParameterKeyEmail {
+			if len(challengeInterestPlaintext.Parameters) != 1 {
+				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
+				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+				return
+			}
+			emailAddress, emailParameterPresent := challengeInterestPlaintext.Parameters[ParameterKeyEmail]
+			if !emailParameterPresent {
+				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
 				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 				return
 			}
 			if challengeRequestState.challengeState == nil {
 				challengeRequestState.challengeState = NewChallengeState()
 			}
-			emailAddress := string(challengeInterestPlaintext.Parameters[0].ParameterValue)
-			emailChallengeState, sendEmailStatus := NewEmailChallenge(caState.SmtpModule, emailAddress)
+			emailChallengeState, sendEmailStatus := NewEmailChallenge(caState.SmtpModule, string(emailAddress))
 			remainingTimeUint64 := uint64(challengeRequestState.challengeState.Expiry.Second())
 			if sendEmailStatus == email.StatusInvalidEmail {
-				// TODO: Handle invalid email
+				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
 				challengeRequestState.challengeState.RemainingAttempts -= 1
 				if challengeRequestState.challengeState.RemainingAttempts == 0 {
 					replyWithError(ErrorCodeRunOutOfTries, interest.Name(), reply)
+					logger.Error("Due to bad email, the requester has run out of tries")
 					delete(caState.ChallengeRequestStateMapping, requestId)
 					return
 				}
@@ -356,20 +385,29 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 			challengeRequestState.emailChallengeState = emailChallengeState
 			replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply)
 		case ChallengeStatusChallengeIssued:
-			if len(challengeInterestPlaintext.Parameters) != 1 || challengeInterestPlaintext.Parameters[0].ParameterKey != ParameterKeyCode {
+			if len(challengeInterestPlaintext.Parameters) != 1 {
+				logger.Error("Bad CHALLENGE interest received: invalid code parameter detected")
+				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+				return
+			}
+			secretCode, secretCodePresent := challengeInterestPlaintext.Parameters[ParameterKeyCode]
+			if !secretCodePresent {
+				logger.Error("Bad CHALLENGE interest received: invalid code parameter detected")
 				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 				return
 			}
 			if challengeRequestState.challengeState.Expiry.After(time.Now()) {
+				logger.Error("Requester has run out of time")
 				replyWithError(ErrorCodeRunOutOfTime, interest.Name(), reply)
 				delete(caState.ChallengeRequestStateMapping, requestId)
 				return
 			}
-			secretCode := string(challengeInterestPlaintext.Parameters[0].ParameterValue)
-			if secretCode != challengeRequestState.emailChallengeState.SecretCode {
+			if string(secretCode) != challengeRequestState.emailChallengeState.SecretCode {
+				logger.Error("Bad CHALLENGE interest received: secret code is incorrect")
 				challengeRequestState.challengeState.RemainingAttempts -= 1
 				remainingTimeUint64 := uint64(challengeRequestState.challengeState.Expiry.Second())
 				if challengeRequestState.challengeState.RemainingAttempts == 0 {
+					logger.Error("Due to bad code, the requester has run out of tries")
 					replyWithError(ErrorCodeRunOutOfTries, interest.Name(), reply)
 					delete(caState.ChallengeRequestStateMapping, requestId)
 					return
@@ -448,7 +486,7 @@ func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyF
 		errorMessageContent.Encode(),
 		sec.NewSha256Signer())
 	if makeDataError != nil {
-		// TODO - handle error making error data packet.
+		log.WithField("module", "ca").Fatalf("Failed to generate error data packet")
 		return
 	}
 	reply(errorData)
@@ -464,7 +502,7 @@ func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc
 		dataWire,
 		sec.NewSha256Signer())
 	if makeDataError != nil {
-		// TODO - handle error making data packet
+		log.WithField("module", "ca").Fatalf("Failed to generate data packet")
 		return
 	}
 	reply(data)

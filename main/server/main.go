@@ -24,7 +24,7 @@ func main() {
 
 	// Start engine
 	ndnTimer := basic_engine.NewTimer()
-	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/nfd.sock", true)
+	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/docker.sock", true)
 	ndnEngine := basic_engine.NewEngine(ndnFace, ndnTimer, sec.NewSha256IntSigner(ndnTimer), passAll)
 	engineStartError := ndnEngine.Start()
 	if engineStartError != nil {
@@ -34,13 +34,13 @@ func main() {
 	defer ndnEngine.Shutdown()
 
 	// Set up SmtpModule
-	smtpModule, smtpModuleSetupError := email.NewSmtpModule("../config/smtp.yml")
+	smtpModule, smtpModuleSetupError := email.NewSmtpModule("../../config/smtp.yml")
 	if smtpModuleSetupError != nil {
 		logger.Fatalf("Error encountered setting up SMTP module: %+v", smtpModuleSetupError)
 	}
 
 	// Set up CaState
-	caState, caStateSetupError := server.NewCaState("../config/ca.yml", smtpModule)
+	caState, caStateSetupError := server.NewCaState("../../config/ca.yml", smtpModule)
 	if caStateSetupError != nil {
 		logger.Fatalf("Error encountered setting up CA State: %+v", caStateSetupError)
 	}

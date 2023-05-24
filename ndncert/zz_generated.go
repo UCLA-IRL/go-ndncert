@@ -9,209 +9,6 @@ import (
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 )
 
-type ParameterEncoder struct {
-	length uint
-}
-
-type ParameterParsingContext struct {
-}
-
-func (encoder *ParameterEncoder) Init(value *Parameter) {
-
-	l := uint(0)
-	l += 1
-	switch x := len(value.ParameterKey); {
-	case x <= 0xfc:
-		l += 1
-	case x <= 0xffff:
-		l += 3
-	case x <= 0xffffffff:
-		l += 5
-	default:
-		l += 9
-	}
-	l += uint(len(value.ParameterKey))
-
-	if value.ParameterValue != nil {
-		l += 1
-		switch x := len(value.ParameterValue); {
-		case x <= 0xfc:
-			l += 1
-		case x <= 0xffff:
-			l += 3
-		case x <= 0xffffffff:
-			l += 5
-		default:
-			l += 9
-		}
-		l += uint(len(value.ParameterValue))
-	}
-
-	encoder.length = l
-
-}
-
-func (context *ParameterParsingContext) Init() {
-
-}
-
-func (encoder *ParameterEncoder) EncodeInto(value *Parameter, buf []byte) {
-
-	pos := uint(0)
-	buf[pos] = byte(133)
-	pos += 1
-	switch x := len(value.ParameterKey); {
-	case x <= 0xfc:
-		buf[pos] = byte(x)
-		pos += 1
-	case x <= 0xffff:
-		buf[pos] = 0xfd
-		binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-		pos += 3
-	case x <= 0xffffffff:
-		buf[pos] = 0xfe
-		binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-		pos += 5
-	default:
-		buf[pos] = 0xff
-		binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-		pos += 9
-	}
-	copy(buf[pos:], value.ParameterKey)
-	pos += uint(len(value.ParameterKey))
-
-	if value.ParameterValue != nil {
-		buf[pos] = byte(135)
-		pos += 1
-		switch x := len(value.ParameterValue); {
-		case x <= 0xfc:
-			buf[pos] = byte(x)
-			pos += 1
-		case x <= 0xffff:
-			buf[pos] = 0xfd
-			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-			pos += 3
-		case x <= 0xffffffff:
-			buf[pos] = 0xfe
-			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-			pos += 5
-		default:
-			buf[pos] = 0xff
-			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-			pos += 9
-		}
-		copy(buf[pos:], value.ParameterValue)
-		pos += uint(len(value.ParameterValue))
-	}
-
-}
-
-func (encoder *ParameterEncoder) Encode(value *Parameter) enc.Wire {
-
-	wire := make(enc.Wire, 1)
-	wire[0] = make([]byte, encoder.length)
-	buf := wire[0]
-	encoder.EncodeInto(value, buf)
-
-	return wire
-}
-
-func (context *ParameterParsingContext) Parse(reader enc.ParseReader, ignoreCritical bool) (*Parameter, error) {
-	if reader == nil {
-		return nil, enc.ErrBufferOverflow
-	}
-	progress := -1
-	value := &Parameter{}
-	var err error
-	var startPos int
-	for {
-		startPos = reader.Pos()
-		if startPos >= reader.Length() {
-			break
-		}
-		typ := enc.TLNum(0)
-		l := enc.TLNum(0)
-		typ, err = enc.ReadTLNum(reader)
-		if err != nil {
-			return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
-		}
-		l, err = enc.ReadTLNum(reader)
-		if err != nil {
-			return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
-		}
-		err = nil
-		for handled := false; !handled; progress++ {
-			switch typ {
-			case 133:
-				if progress+1 == 0 {
-					handled = true
-					{
-						var builder strings.Builder
-						_, err = io.CopyN(&builder, reader, int64(l))
-						if err == nil {
-							value.ParameterKey = builder.String()
-						}
-					}
-
-				}
-			case 135:
-				if progress+1 == 1 {
-					handled = true
-					value.ParameterValue = make([]byte, l)
-					_, err = io.ReadFull(reader, value.ParameterValue)
-
-				}
-			default:
-				handled = true
-				if !ignoreCritical && ((typ <= 31) || ((typ & 1) == 1)) {
-					return nil, enc.ErrUnrecognizedField{TypeNum: typ}
-				}
-				err = reader.Skip(int(l))
-			}
-			if err == nil && !handled {
-				switch progress {
-				case 0 - 1:
-					err = enc.ErrSkipRequired{Name: "ParameterKey", TypeNum: 133}
-				case 1 - 1:
-					value.ParameterValue = nil
-				}
-			}
-			if err != nil {
-				return nil, enc.ErrFailToParse{TypeNum: typ, Err: err}
-			}
-		}
-	}
-	startPos = reader.Pos()
-	for ; progress < 2; progress++ {
-		switch progress {
-		case 0 - 1:
-			err = enc.ErrSkipRequired{Name: "ParameterKey", TypeNum: 133}
-		case 1 - 1:
-			value.ParameterValue = nil
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	return value, nil
-}
-
-func (value *Parameter) Encode() enc.Wire {
-	encoder := ParameterEncoder{}
-	encoder.Init(value)
-	return encoder.Encode(value)
-}
-
-func (value *Parameter) Bytes() []byte {
-	return value.Encode().Join()
-}
-
-func ParseParameter(reader enc.ParseReader, ignoreCritical bool) (*Parameter, error) {
-	context := ParameterParsingContext{}
-	context.Init()
-	return context.Parse(reader, ignoreCritical)
-}
-
 type CaProfileEncoder struct {
 	length uint
 
@@ -1513,41 +1310,12 @@ func ParseEncryptedMessage(reader enc.ParseReader, ignoreCritical bool) (*Encryp
 
 type ChallengeInterestPlaintextEncoder struct {
 	length uint
-
-	Parameters_subencoder []struct {
-		Parameters_encoder ParameterEncoder
-	}
 }
 
 type ChallengeInterestPlaintextParsingContext struct {
-	Parameters_context ParameterParsingContext
 }
 
 func (encoder *ChallengeInterestPlaintextEncoder) Init(value *ChallengeInterestPlaintext) {
-
-	{
-		Parameters_l := len(value.Parameters)
-		encoder.Parameters_subencoder = make([]struct {
-			Parameters_encoder ParameterEncoder
-		}, Parameters_l)
-		for i := 0; i < Parameters_l; i++ {
-			pseudoEncoder := &encoder.Parameters_subencoder[i]
-			pseudoValue := struct {
-				Parameters *Parameter
-			}{
-				Parameters: value.Parameters[i],
-			}
-			{
-				encoder := pseudoEncoder
-				value := &pseudoValue
-				if value.Parameters != nil {
-					encoder.Parameters_encoder.Init(value.Parameters)
-				}
-				_ = encoder
-				_ = value
-			}
-		}
-	}
 
 	l := uint(0)
 	l += 1
@@ -1563,45 +1331,12 @@ func (encoder *ChallengeInterestPlaintextEncoder) Init(value *ChallengeInterestP
 	}
 	l += uint(len(value.SelectedChallenge))
 
-	if value.Parameters != nil {
-		for seq_i, seq_v := range value.Parameters {
-			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
-			pseudoValue := struct {
-				Parameters *Parameter
-			}{
-				Parameters: seq_v,
-			}
-			{
-				encoder := pseudoEncoder
-				value := &pseudoValue
-				if value.Parameters != nil {
-					l += 1
-					switch x := encoder.Parameters_encoder.length; {
-					case x <= 0xfc:
-						l += 1
-					case x <= 0xffff:
-						l += 3
-					case x <= 0xffffffff:
-						l += 5
-					default:
-						l += 9
-					}
-					l += encoder.Parameters_encoder.length
-				}
-
-				_ = encoder
-				_ = value
-			}
-		}
-	}
-
 	encoder.length = l
 
 }
 
 func (context *ChallengeInterestPlaintextParsingContext) Init() {
 
-	context.Parameters_context.Init()
 }
 
 func (encoder *ChallengeInterestPlaintextEncoder) EncodeInto(value *ChallengeInterestPlaintext, buf []byte) {
@@ -1628,49 +1363,6 @@ func (encoder *ChallengeInterestPlaintextEncoder) EncodeInto(value *ChallengeInt
 	}
 	copy(buf[pos:], value.SelectedChallenge)
 	pos += uint(len(value.SelectedChallenge))
-
-	if value.Parameters != nil {
-		for seq_i, seq_v := range value.Parameters {
-			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
-			pseudoValue := struct {
-				Parameters *Parameter
-			}{
-				Parameters: seq_v,
-			}
-			{
-				encoder := pseudoEncoder
-				value := &pseudoValue
-				if value.Parameters != nil {
-					buf[pos] = byte(193)
-					pos += 1
-					switch x := encoder.Parameters_encoder.length; {
-					case x <= 0xfc:
-						buf[pos] = byte(x)
-						pos += 1
-					case x <= 0xffff:
-						buf[pos] = 0xfd
-						binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-						pos += 3
-					case x <= 0xffffffff:
-						buf[pos] = 0xfe
-						binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-						pos += 5
-					default:
-						buf[pos] = 0xff
-						binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-						pos += 9
-					}
-					if encoder.Parameters_encoder.length > 0 {
-						encoder.Parameters_encoder.EncodeInto(value.Parameters, buf[pos:])
-						pos += encoder.Parameters_encoder.length
-					}
-				}
-
-				_ = encoder
-				_ = value
-			}
-		}
-	}
 
 }
 
@@ -1722,26 +1414,6 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 					}
 
 				}
-			case 193:
-				if progress+1 == 1 {
-					handled = true
-					if value.Parameters == nil {
-						value.Parameters = make([]*Parameter, 0)
-					}
-					{
-						pseudoValue := struct {
-							Parameters *Parameter
-						}{}
-						{
-							value := &pseudoValue
-							value.Parameters, err = context.Parameters_context.Parse(reader.Delegate(int(l)), ignoreCritical)
-							_ = value
-						}
-						value.Parameters = append(value.Parameters, pseudoValue.Parameters)
-					}
-					progress--
-
-				}
 			default:
 				handled = true
 				if !ignoreCritical && ((typ <= 31) || ((typ & 1) == 1)) {
@@ -1753,8 +1425,6 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 				switch progress {
 				case 0 - 1:
 					err = enc.ErrSkipRequired{Name: "SelectedChallenge", TypeNum: 161}
-				case 1 - 1:
-
 				}
 			}
 			if err != nil {
@@ -1763,12 +1433,10 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 		}
 	}
 	startPos = reader.Pos()
-	for ; progress < 2; progress++ {
+	for ; progress < 1; progress++ {
 		switch progress {
 		case 0 - 1:
 			err = enc.ErrSkipRequired{Name: "SelectedChallenge", TypeNum: 161}
-		case 1 - 1:
-
 		}
 	}
 	if err != nil {
@@ -1798,14 +1466,9 @@ type ChallengeDataPlaintextEncoder struct {
 
 	IssuedCertificateName_length uint
 	ForwardingHint_length        uint
-
-	Parameters_subencoder []struct {
-		Parameters_encoder ParameterEncoder
-	}
 }
 
 type ChallengeDataPlaintextParsingContext struct {
-	Parameters_context ParameterParsingContext
 }
 
 func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext) {
@@ -1821,30 +1484,6 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		encoder.ForwardingHint_length = 0
 		for _, c := range value.ForwardingHint {
 			encoder.ForwardingHint_length += uint(c.EncodingLength())
-		}
-	}
-
-	{
-		Parameters_l := len(value.Parameters)
-		encoder.Parameters_subencoder = make([]struct {
-			Parameters_encoder ParameterEncoder
-		}, Parameters_l)
-		for i := 0; i < Parameters_l; i++ {
-			pseudoEncoder := &encoder.Parameters_subencoder[i]
-			pseudoValue := struct {
-				Parameters *Parameter
-			}{
-				Parameters: value.Parameters[i],
-			}
-			{
-				encoder := pseudoEncoder
-				value := &pseudoValue
-				if value.Parameters != nil {
-					encoder.Parameters_encoder.Init(value.Parameters)
-				}
-				_ = encoder
-				_ = value
-			}
 		}
 	}
 
@@ -1932,45 +1571,12 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		}
 	}
 
-	if value.Parameters != nil {
-		for seq_i, seq_v := range value.Parameters {
-			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
-			pseudoValue := struct {
-				Parameters *Parameter
-			}{
-				Parameters: seq_v,
-			}
-			{
-				encoder := pseudoEncoder
-				value := &pseudoValue
-				if value.Parameters != nil {
-					l += 1
-					switch x := encoder.Parameters_encoder.length; {
-					case x <= 0xfc:
-						l += 1
-					case x <= 0xffff:
-						l += 3
-					case x <= 0xffffffff:
-						l += 5
-					default:
-						l += 9
-					}
-					l += encoder.Parameters_encoder.length
-				}
-
-				_ = encoder
-				_ = value
-			}
-		}
-	}
-
 	encoder.length = l
 
 }
 
 func (context *ChallengeDataPlaintextParsingContext) Init() {
 
-	context.Parameters_context.Init()
 }
 
 func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPlaintext, buf []byte) {
@@ -2112,49 +1718,6 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 			buf[pos] = 8
 			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
 			pos += 9
-		}
-	}
-
-	if value.Parameters != nil {
-		for seq_i, seq_v := range value.Parameters {
-			pseudoEncoder := &encoder.Parameters_subencoder[seq_i]
-			pseudoValue := struct {
-				Parameters *Parameter
-			}{
-				Parameters: seq_v,
-			}
-			{
-				encoder := pseudoEncoder
-				value := &pseudoValue
-				if value.Parameters != nil {
-					buf[pos] = byte(193)
-					pos += 1
-					switch x := encoder.Parameters_encoder.length; {
-					case x <= 0xfc:
-						buf[pos] = byte(x)
-						pos += 1
-					case x <= 0xffff:
-						buf[pos] = 0xfd
-						binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-						pos += 3
-					case x <= 0xffffffff:
-						buf[pos] = 0xfe
-						binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-						pos += 5
-					default:
-						buf[pos] = 0xff
-						binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-						pos += 9
-					}
-					if encoder.Parameters_encoder.length > 0 {
-						encoder.Parameters_encoder.EncodeInto(value.Parameters, buf[pos:])
-						pos += encoder.Parameters_encoder.length
-					}
-				}
-
-				_ = encoder
-				_ = value
-			}
 		}
 	}
 
@@ -2322,26 +1885,6 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 					}
 
 				}
-			case 193:
-				if progress+1 == 6 {
-					handled = true
-					if value.Parameters == nil {
-						value.Parameters = make([]*Parameter, 0)
-					}
-					{
-						pseudoValue := struct {
-							Parameters *Parameter
-						}{}
-						{
-							value := &pseudoValue
-							value.Parameters, err = context.Parameters_context.Parse(reader.Delegate(int(l)), ignoreCritical)
-							_ = value
-						}
-						value.Parameters = append(value.Parameters, pseudoValue.Parameters)
-					}
-					progress--
-
-				}
 			default:
 				handled = true
 				if !ignoreCritical && ((typ <= 31) || ((typ & 1) == 1)) {
@@ -2363,8 +1906,6 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 					value.RemainingTries = nil
 				case 5 - 1:
 					value.RemainingTime = nil
-				case 6 - 1:
-
 				}
 			}
 			if err != nil {
@@ -2373,7 +1914,7 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 		}
 	}
 	startPos = reader.Pos()
-	for ; progress < 7; progress++ {
+	for ; progress < 6; progress++ {
 		switch progress {
 		case 0 - 1:
 			err = enc.ErrSkipRequired{Name: "Status", TypeNum: 155}
@@ -2387,8 +1928,6 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 			value.RemainingTries = nil
 		case 5 - 1:
 			value.RemainingTime = nil
-		case 6 - 1:
-
 		}
 	}
 	if err != nil {
