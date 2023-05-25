@@ -24,7 +24,7 @@ func main() {
 
 	// Start engine
 	ndnTimer := basic_engine.NewTimer()
-	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/docker.sock", true)
+	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/nfd.sock", true)
 	ndnEngine := basic_engine.NewEngine(ndnFace, ndnTimer, sec.NewSha256IntSigner(ndnTimer), passAll)
 	engineStartError := ndnEngine.Start()
 	if engineStartError != nil {

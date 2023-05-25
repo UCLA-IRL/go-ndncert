@@ -23,7 +23,7 @@ func main() {
 
 	// Start engine
 	ndnTimer := basic_engine.NewTimer()
-	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/docker.sock", true)
+	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/nfd.sock", true)
 	ndnEngine := basic_engine.NewEngine(ndnFace, ndnTimer, sec.NewSha256IntSigner(ndnTimer), passAll)
 	engineStartError := ndnEngine.Start()
 	if engineStartError != nil {
@@ -32,12 +32,14 @@ func main() {
 	}
 	defer ndnEngine.Shutdown()
 
-	// Prompt client for the Ca's prefix
-	var caPrefix string
-	fmt.Print("Enter the Ca Prefix: ")
-	requesterState := client.NewRequesterState("/ndn/edu/ucla")
-	fmt.Scan(&caPrefix)
-	requesterState.ExpressNewInterest(ndnEngine)
+	infoWire, err := client.ExpressInfoInterest(ndnEngine, "/ndn/edu/ucla")
+	if err != nil {
+		fmt.Print(err.Error())
+	} else {
+		fmt.Print(infoWire)
+	}
+	//requesterState := client.NewRequesterState("/ndn/edu/ucla")
+	//requesterState.ExpressNewInterest(ndnEngine)
 
 	// Prompt client for the email address to send the secret code to
 	//for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {

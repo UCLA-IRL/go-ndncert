@@ -7,6 +7,7 @@ import (
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
+	"github.com/zjkmxy/go-ndn/pkg/schema"
 	"github.com/zjkmxy/go-ndn/pkg/security"
 	"go-ndncert/crypto"
 	"go-ndncert/ndncert"
@@ -46,6 +47,33 @@ func NewRequesterState(caPrefix string) *RequesterState {
 		ecdhState:       &ecdhState,
 		ChallengeStatus: ChallengeStatusBeforeChallenge,
 	}
+}
+
+func ExpressInfoInterest(ndnEngine ndn.Engine, caPrefix string) ([]byte, error) {
+	logger := log.WithField("module", "requester")
+	logger.Infof("Generating an INFO interest to %s", caPrefix+server.PrefixInfo)
+	ntSchemaTree := schema.CreateFromJson(server.SchemaJson, map[string]any{})
+	infoPrefix, _ := enc.NameFromStr(caPrefix + server.PrefixInfo)
+	treeAttachError := ntSchemaTree.Attach(infoPrefix, ndnEngine)
+	if treeAttachError != nil {
+		logger.Error("NTSchema Tree failed to attach")
+		return nil, treeAttachError
+	}
+	defer ntSchemaTree.Detach()
+
+	// Fetch the data
+	matchedNode := ntSchemaTree.Root().Apply(enc.Matching{})
+	callResult := <-matchedNode.Call("NeedChan").(chan schema.NeedResult)
+	switch callResult.Status {
+	case ndn.InterestResultNack:
+		return nil, errors.New(fmt.Sprintf("info failed: nacked with reason %s", *callResult.NackReason))
+	case ndn.InterestResultTimeout:
+		return nil, errors.New("info failed: interest timed out")
+	case ndn.InterestCancelled:
+		return nil, errors.New("info failed: interest cancelled")
+	}
+	fmt.Printf("Received Data: %+v\n", string(callResult.Content.Join()))
+	return callResult.Content.Join(), nil
 }
 
 func (requesterState *RequesterState) ExpressNewInterest(ndnEngine ndn.Engine) error {

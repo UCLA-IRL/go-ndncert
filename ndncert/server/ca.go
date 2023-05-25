@@ -206,9 +206,9 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	logger := log.WithField("module", "ca")
 
-	// Set up INFO route
 	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
 	logger.Infof("Setting up routing with ca prefix name: %s", caPrefixName)
+	ndnEngine.RegisterRoute(caPrefixName)
 	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
 		CaInfo:         caState.CaInfo,
@@ -217,6 +217,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 		CaCertificate:  caState.CaCert,
 	}
 
+	// Set up INFO route
 	infoPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixInfo)
 	logger.Infof("Initializing INFO route on %s", infoPrefix.String())
 	ntSchema := schema.CreateFromJson(SchemaJson, map[string]any{})
@@ -225,9 +226,9 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 		logger.Fatal("Failed to initialize INFO route: ntSchema attach error")
 		return ntSchemaAttachError
 	}
-	defer ntSchema.Detach()
+
 	matchedNode := ntSchema.Root().Apply(enc.Matching{})
-	version := matchedNode.Call("Provide", enc.Wire{caProfile.Encode().Join()})
+	version := matchedNode.Call("Provide", caProfile.Encode())
 	logger.Infof("Generated CA Profile Packet with version=%d", version)
 
 	// Set up NEW route
