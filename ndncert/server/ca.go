@@ -206,9 +206,12 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	logger := log.WithField("module", "ca")
 
+	// Register the route
 	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
 	logger.Infof("Setting up routing with ca prefix name: %s", caPrefixName)
 	ndnEngine.RegisterRoute(caPrefixName)
+
+	// Set up INFO route
 	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
 		CaInfo:         caState.CaInfo,
@@ -216,8 +219,6 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 		MaxValidPeriod: uint64(caState.MaxCertValidityPeriod.Seconds()),
 		CaCertificate:  caState.CaCert,
 	}
-
-	// Set up INFO route
 	infoPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixInfo)
 	logger.Infof("Initializing INFO route on %s", infoPrefix.String())
 	ntSchema := schema.CreateFromJson(SchemaJson, map[string]any{})
@@ -251,7 +252,9 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 	logger := log.WithField("module", "ca")
 	logger.Infof("Handling incoming NEW Interest with name: %s", interest.Name().String())
+	logger.Debugf("Raw interest app params: %s", interest.AppParam())
 	newInterest, _ := ndncert.ParseNewInterestAppParameters(enc.NewWireReader(interest.AppParam()), true)
+	logger.Debugf("succeeded parsing")
 	certRequestData, _, _ := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)

@@ -32,14 +32,15 @@ func main() {
 	}
 	defer ndnEngine.Shutdown()
 
-	infoWire, err := client.ExpressInfoInterest(ndnEngine, "/ndn/edu/ucla")
-	if err != nil {
-		fmt.Print(err.Error())
-	} else {
-		fmt.Print(infoWire)
-	}
-	//requesterState := client.NewRequesterState("/ndn/edu/ucla")
-	//requesterState.ExpressNewInterest(ndnEngine)
+	//infoWire, err := client.ExpressInfoInterest(ndnEngine, "/ndn/edu/ucla")
+	//if err != nil {
+	//	fmt.Print(err.Error())
+	//} else {
+	//	fmt.Print(infoWire)
+	//}
+
+	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla", nil, nil)
+	requesterState.ExpressNewInterest(ndnEngine)
 
 	// Prompt client for the email address to send the secret code to
 	//for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {
@@ -53,7 +54,7 @@ func main() {
 	//fmt.Print("Enter the secret code you received from your email: ")
 	//_ := client.NewRequesterState(/*)*/
 
-	// Wait for keyboard quit signal
+	//Wait for keyboard quit signal
 	sigChannel := make(chan os.Signal, 1)
 	fmt.Print("Start serving ...\n")
 	signal.Notify(sigChannel, os.Interrupt, syscall.SIGTERM)
