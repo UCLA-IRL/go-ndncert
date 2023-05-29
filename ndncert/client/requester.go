@@ -122,8 +122,11 @@ func (requesterState *requesterState) ExpressNewInterest(ndnEngine ndn.Engine) e
 			FinalBlockID: nil,
 		},
 		enc.Wire{publicKeyEncoding},
-		sec.NewEccSigner,
+		sec.NewEmptySigner(),
 	)
+	if certRequestError != nil {
+		logger.Fatal("Failed to generate the certificate")
+	}
 
 	newInterestName, _ := enc.NameFromStr(requesterState.caPrefix + server.PrefixNew)
 	newInterestAppParameters := ndncert.NewInterestAppParameters{
