@@ -39,8 +39,9 @@ func main() {
 	//	fmt.Print(infoWire)
 	//}
 
-	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla", nil, nil)
+	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla")
 	requesterState.ExpressNewInterest(ndnEngine)
+	requesterState.ExpressEmailChoiceChallenge(ndnEngine, "ricky99.guo@gmail.com")
 
 	// Prompt client for the email address to send the secret code to
 	//for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {

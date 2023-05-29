@@ -209,7 +209,11 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	// Register the route
 	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
 	logger.Infof("Setting up routing with ca prefix name: %s", caPrefixName)
-	ndnEngine.RegisterRoute(caPrefixName)
+	registerRouteError := ndnEngine.RegisterRoute(caPrefixName)
+	if registerRouteError != nil {
+		logger.Fatalf("Failed to register route with ndn engine")
+		return registerRouteError
+	}
 
 	// Set up INFO route
 	caProfile := ndncert.CaProfile{
@@ -235,16 +239,24 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	// Set up NEW route
 	newPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixNew)
 	logger.Infof("Setting up NEW route on %s", newPrefix.String())
-	ndnEngine.AttachHandler(newPrefix, func(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
+	attachNewPrefixHandlerError := ndnEngine.AttachHandler(newPrefix, func(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 		caState.OnNew(interest, rawInterest, sigCovered, reply, deadline)
 	})
+	if attachNewPrefixHandlerError != nil {
+		logger.Fatalf("Failed to attach NEW prefix handler")
+		return attachNewPrefixHandlerError
+	}
 
 	// Set up CHALLENGE route
 	challengePrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixChallenge)
 	logger.Infof("Setting up CHALLENGE route on %s", challengePrefix.String())
-	ndnEngine.AttachHandler(challengePrefix, func(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
+	attachChallengePrefixHandlerError := ndnEngine.AttachHandler(challengePrefix, func(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 		caState.OnChallenge(interest, rawInterest, sigCovered, reply, deadline)
 	})
+	if attachChallengePrefixHandlerError != nil {
+		logger.Fatalf("Failed to attach CHALLENGE prefix handler")
+		return attachChallengePrefixHandlerError
+	}
 
 	return nil
 }
@@ -262,6 +274,8 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		return
 	}
 
+	//notBefore, notAfter := certRequestData.Signature().Validity()
+
 	// TODO: add state for this - Specifically, the NotBefore field and NotAfter field in the certificate request should satisfy
 	//request.NotBefore < request.NotAfter
 	//request.NotBefore >= max(now - 120s, ca-certificate.NotBefore)
@@ -270,6 +284,8 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	ecdhState := getEcdhState(newInterest)
 	salt := getSalt()
 	requestId := getRequestId(caState)
+
+	logger.Infof("Creating requestId mapping with requestId: %s", requestId)
 
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
 		requestId:           requestId,
@@ -294,11 +310,14 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 
 func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 	logger := log.WithField("module", "ca")
+	logger.Infof("interest name: %s", interest.Name().String())
 	nameComponents := strings.Split(interest.Name().String(), "/")
-	if len(nameComponents[len(nameComponents)+negativeRequestIdOffset]) != RequestIdLength {
+	curRequestId := nameComponents[len(nameComponents)+negativeRequestIdOffset]
+	curRequestIdLength := len(curRequestId)
+	if curRequestIdLength != RequestIdLength {
 		logger.Errorf(
-			"Bad CHALLENGE interest received due request id length, should be %d but is %d",
-			RequestIdLength, len(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
+			"Bad CHALLENGE interest received due request id of %s with length, should be %d but is %d",
+			curRequestId, RequestIdLength, curRequestIdLength)
 		replyWithError(ErrorCodeBadInterestFormat, interest.Name(), reply)
 		return
 	}
@@ -321,6 +340,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 
 	plaintext := crypto.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
+	logger.Infof("RECEIVED PLAINTEXT: %S", plaintext)
 	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
 
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
@@ -328,7 +348,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 		return
 	}
-
+	logger.Infof("Received parameters map: %s", challengeInterestPlaintext.Parameters)
 	switch {
 	case challengeInterestPlaintext.SelectedChallenge == SelectedChallengeEmail:
 		switch challengeRequestState.status {
@@ -478,6 +498,8 @@ func generateCertificateName(caState *CaState) enc.Name {
 }
 
 func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyFunc) {
+	logger := log.WithField("module", "ca")
+	logger.Infof("Replying with error")
 	errorMessageContent := ndncert.ErrorMessage{
 		ErrorCode: uint64(errorCode),
 		ErrorInfo: ErrorCodeMapping[errorCode],
@@ -490,13 +512,19 @@ func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyF
 		errorMessageContent.Encode(),
 		sec.NewSha256Signer())
 	if makeDataError != nil {
-		log.WithField("module", "ca").Fatalf("Failed to generate error data packet")
+		logger.Fatalf("Failed to generate error data packet")
 		return
 	}
-	reply(errorData)
+	errorDataReplyError := reply(errorData)
+	if errorDataReplyError != nil {
+		logger.Fatalf("Failed to reply with error")
+		return
+	}
 }
 
 func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc) {
+	logger := log.WithField("module", "ca")
+	logger.Infof("Replying with data")
 	data, _, makeDataError := spec_2022.Spec{}.MakeData(
 		interestName,
 		&ndn.DataConfig{
@@ -506,8 +534,11 @@ func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc
 		dataWire,
 		sec.NewSha256Signer())
 	if makeDataError != nil {
-		log.WithField("module", "ca").Fatalf("Failed to generate data packet")
+		logger.Fatalf("Failed to generate data packet")
 		return
 	}
-	reply(data)
+	replyError := reply(data)
+	if replyError != nil {
+		logger.Fatalf("Failed to reply with data")
+	}
 }

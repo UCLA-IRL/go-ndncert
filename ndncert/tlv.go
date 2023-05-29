@@ -58,15 +58,15 @@ type ChallengeDataPlaintext struct {
 	//+field:string
 	ChallengeStatus string `tlv:"0xA3"`
 	//+field:name:optional
-	IssuedCertificateName enc.Name `tlv:"0xA9"` // usage: plaintext-success
+	IssuedCertificateName enc.Name `tlv:"0xA9"`
 	//+field:name:optional
-	ForwardingHint enc.Name `tlv:"0x1e"` // usage: ALL
+	ForwardingHint enc.Name `tlv:"0x1e"`
 	//+field:natural:optional
-	RemainingTries *uint64 `tlv:"0xA5"` // usage: plaintext-challenge
+	RemainingTries *uint64 `tlv:"0xA5"`
 	//+field:natural:optional
-	RemainingTime *uint64 `tlv:"0xA7"` // usage: plaintext-challenge
+	RemainingTime *uint64 `tlv:"0xA7"`
 	//+field:map:string:string:0x87:[]byte:binary
-	Parameters map[string][]byte `tlv:"0x85"` // usage: plaintext-challenge
+	Parameters map[string][]byte `tlv:"0x85"`
 }
 
 type ErrorMessage struct {
