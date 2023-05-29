@@ -1,6 +1,9 @@
 package client
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,7 +17,7 @@ import (
 	"go-ndncert/crypto"
 	"go-ndncert/ndncert"
 	"go-ndncert/ndncert/server"
-	"math/rand"
+	mrand "math/rand"
 	"time"
 )
 
@@ -30,47 +33,38 @@ const (
 	ChallengeStatusFailure
 )
 
-type RequesterState struct {
+type requesterState struct {
+	requesterName   string
 	caPrefix        string
 	ecdhState       *crypto.ECDHState
-	certRequest     []byte
-	requestId       RequestId
-	symmetricKey    [16]byte
+	certKey         *ecdsa.PrivateKey
 	challengeStatus ChallengeStatus
+
+	requestId    RequestId
+	symmetricKey [16]byte
 }
 
-func NewRequesterState(requesterName string, caPrefix string, notBefore *time.Duration, notAfter *time.Duration) *RequesterState {
+func NewRequesterState(requesterName string, caPrefix string) *requesterState {
 	// TODO: Add implementation for notBefore and notAfter step
 	// TODO: Switch to using x.509 certificate format
 	logger := log.WithField("module", "requester")
 	logger.Infof("Generating a new requester state with Ca Prefix: %s", caPrefix)
 
+	// Generate ECDH Key Pair used for encryption
 	ecdhState := crypto.ECDHState{}
 	ecdhState.GenerateKeyPair()
 
-	keyId := make([]byte, 8)
-	issuerId := make([]byte, 8)
-	binary.LittleEndian.PutUint64(keyId, rand.Uint64())
-	binary.LittleEndian.PutUint64(issuerId, rand.Uint64())
-	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requesterName, keyId, issuerId))
-	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
-		certName,
-		&ndn.DataConfig{
-			ContentType:  utils.IdPtr(ndn.ContentTypeKey),
-			Freshness:    utils.IdPtr(time.Hour),
-			FinalBlockID: nil,
-		},
-		enc.Wire{ecdhState.PublicKey.Bytes()},
-		sec.NewHmacSigner(certName, ecdhState.PrivateKey.Bytes(), false, time.Hour),
-	)
-	if certRequestError != nil {
-		logger.Errorf("Failed to generate certificate request: %s", certRequestError.Error())
+	// Generate ECDSA key used for signing
+	certKey, certKeyError := ecdsa.GenerateKey(elliptic.P224(), crand.Reader)
+	if certKeyError != nil {
+		logger.Fatalf("Failed to generate certificate private key using ecdsa")
 	}
 
-	return &RequesterState{
+	return &requesterState{
+		requesterName:   requesterName,
 		caPrefix:        caPrefix,
 		ecdhState:       &ecdhState,
-		certRequest:     certRequest.Join(),
+		certKey:         certKey,
 		challengeStatus: ChallengeStatusBeforeChallenge,
 	}
 }
@@ -102,15 +96,39 @@ func ExpressInfoInterest(ndnEngine ndn.Engine, caPrefix string) ([]byte, error) 
 	return callResult.Content.Join(), nil
 }
 
-func (requesterState *RequesterState) ExpressNewInterest(ndnEngine ndn.Engine) error {
-	log.WithField(
+func (requesterState *requesterState) ExpressNewInterest(ndnEngine ndn.Engine) error {
+	logger := log.WithField(
 		"module", "requester",
-	).Infof("Generating a NEW interest to %s", requesterState.caPrefix+server.PrefixNew)
+	)
+	logger.Infof("Generating a NEW interest to %s", requesterState.caPrefix+server.PrefixNew)
+
+	// Get the public key encoding
+	publicKeyEncoding, publicKeyEncodingError := crypto.EncodePublicKey(&requesterState.certKey.PublicKey)
+	if publicKeyEncodingError != nil {
+		logger.Fatal("Failed to encode the public key")
+	}
+
+	// Generate the cert-request
+	keyId := make([]byte, 8)
+	issuerId := make([]byte, 8)
+	binary.LittleEndian.PutUint64(keyId, mrand.Uint64())
+	binary.LittleEndian.PutUint64(issuerId, mrand.Uint64())
+	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requesterState.requesterName, keyId, issuerId))
+	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
+		certName,
+		&ndn.DataConfig{
+			ContentType:  utils.IdPtr(ndn.ContentTypeKey),
+			Freshness:    utils.IdPtr(time.Hour),
+			FinalBlockID: nil,
+		},
+		enc.Wire{publicKeyEncoding},
+		sec.NewEccSigner,
+	)
 
 	newInterestName, _ := enc.NameFromStr(requesterState.caPrefix + server.PrefixNew)
 	newInterestAppParameters := ndncert.NewInterestAppParameters{
 		EcdhPub:     requesterState.ecdhState.PublicKey.Bytes(),
-		CertRequest: requesterState.certRequest,
+		CertRequest: certRequest.Join(),
 	}
 	newInterestWire, newInterestFinalName := makeInterestPacket(newInterestName, newInterestAppParameters.Encode())
 	interestConfig := &ndn.InterestConfig{
@@ -133,7 +151,7 @@ func (requesterState *RequesterState) ExpressNewInterest(ndnEngine ndn.Engine) e
 	)
 }
 
-func (requesterState *RequesterState) ExpressEmailChoiceChallenge(ndnEngine ndn.Engine, emailAddress string) error {
+func (requesterState *requesterState) ExpressEmailChoiceChallenge(ndnEngine ndn.Engine, emailAddress string) error {
 	logger := log.WithField("module", "requester")
 	if requesterState.challengeStatus != ChallengeStatusAfterNewData {
 		logger.Error("Bad attempt to generate email choice challenge: does not follow NEW interest")
@@ -184,7 +202,7 @@ func (requesterState *RequesterState) ExpressEmailChoiceChallenge(ndnEngine ndn.
 	)
 }
 
-func (requesterState *RequesterState) ExpressEmailCodeChallenge(ndnEngine ndn.Engine, secretCode string) error {
+func (requesterState *requesterState) ExpressEmailCodeChallenge(ndnEngine ndn.Engine, secretCode string) error {
 	logger := log.WithField("module", "requester")
 	if requesterState.challengeStatus != ChallengeStatusAfterSelectionChallengeData {
 		logger.Error("Bad attempt to generate email code challenge: does not follow email choice challenge")

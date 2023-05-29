@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"crypto/ecdsa"
 	"crypto/hmac"
 	"crypto/sha256"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
@@ -9,15 +10,15 @@ import (
 	"time"
 )
 
-// certSigner is a Data certificate signer that uses a provided HMAC key.
-type certSigner struct {
+ndncertSigner is a signer that uses a provided ECDSA key.
+type ndncertSigner struct {
 	keyName   enc.Name
-	key       []byte
+	key       *ecdsa.PrivateKey
 	notBefore *time.Time
 	notAfter  *time.Time
 }
 
-func (signer *certSigner) SigInfo() (*ndn.SigConfig, error) {
+func (signer *ndncertSigner) SigInfo() (*ndn.SigConfig, error) {
 	return &ndn.SigConfig{
 		Type:      ndn.SignatureHmacWithSha256,
 		KeyName:   signer.keyName,
@@ -26,11 +27,11 @@ func (signer *certSigner) SigInfo() (*ndn.SigConfig, error) {
 	}, nil
 }
 
-func (*certSigner) EstimateSize() uint {
+func (*ndncertSigner) EstimateSize() uint {
 	return 32
 }
 
-func (signer *certSigner) ComputeSigValue(covered enc.Wire) ([]byte, error) {
+func (signer *ndncertSigner) ComputeSigValue(covered enc.Wire) ([]byte, error) {
 	mac := hmac.New(sha256.New, signer.key)
 	for _, buf := range covered {
 		_, err := mac.Write(buf)
@@ -41,9 +42,9 @@ func (signer *certSigner) ComputeSigValue(covered enc.Wire) ([]byte, error) {
 	return mac.Sum(nil), nil
 }
 
-// NewCertSigner creates a Cert signer that uses DigestSha256.
-func NewCertSigner(keyName enc.Name, key []byte, notBefore *time.Time, notAfter *time.Time) ndn.Signer {
-	return &certSigner{
+// NewNDNCertSigner creates a Certificate signer that uses DigestSha256.
+func NewNDNCertSigner(keyName enc.Name, key []byte, notBefore *time.Time, notAfter *time.Time) ndn.Signer {
+	return &ndncertSigner{
 		keyName:   keyName,
 		key:       key,
 		notBefore: notBefore,
@@ -51,14 +52,14 @@ func NewCertSigner(keyName enc.Name, key []byte, notBefore *time.Time, notAfter 
 	}
 }
 
-// hmacIntSigner is a Interest signer that uses a provided HMAC key.
-type certIntSigner struct {
+// ndncertIntSigner is a Interest signer that uses a provided HMAC key.
+type ndncertIntSigner struct {
 	key   []byte
 	timer ndn.Timer
 	seq   uint64
 }
 
-func (signer *certIntSigner) SigInfo() (*ndn.SigConfig, error) {
+func (signer *ndncertIntSigner) SigInfo() (*ndn.SigConfig, error) {
 	return &ndn.SigConfig{
 		Type:    ndn.SignatureHmacWithSha256,
 		KeyName: enc.Name{enc.Component{Typ: enc.TypeGenericNameComponent, Val: signer.key}},
@@ -68,11 +69,11 @@ func (signer *certIntSigner) SigInfo() (*ndn.SigConfig, error) {
 	}, nil
 }
 
-func (*certIntSigner) EstimateSize() uint {
+func (*ndncertIntSigner) EstimateSize() uint {
 	return 32
 }
 
-func (signer *certIntSigner) ComputeSigValue(covered enc.Wire) ([]byte, error) {
+func (signer *ndncertIntSigner) ComputeSigValue(covered enc.Wire) ([]byte, error) {
 	mac := hmac.New(sha256.New, signer.key)
 	for _, buf := range covered {
 		_, err := mac.Write(buf)
@@ -85,7 +86,7 @@ func (signer *certIntSigner) ComputeSigValue(covered enc.Wire) ([]byte, error) {
 
 // NewCertIntSigner creates an Interest signer that uses DigestSha256.
 func NewCertIntSigner(key []byte, timer ndn.Timer) ndn.Signer {
-	return &certIntSigner{key, timer, 0}
+	return &ndncertIntSigner{key, timer, 0}
 }
 
 func CheckCertSig(sigCovered enc.Wire, sigValue []byte, key []byte) bool {
