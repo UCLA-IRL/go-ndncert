@@ -25,7 +25,6 @@ const RequestIdLength = 8
 type ChallengeStatus uint64
 type RequestId [RequestIdLength]byte
 
-// TODO - make a singular sha256signer per requeststate
 const (
 	ChallengeStatusBeforeChallenge ChallengeStatus = iota
 	ChallengeStatusAfterNewData
@@ -40,7 +39,6 @@ type requesterState struct {
 	ecdhState       *crypto.ECDHState
 	interestSigner  ndn.Signer
 	ndnEngine       ndn.Engine
-	ndnTimer        ndn.Timer
 	requesterName   string
 
 	requestId    RequestId
@@ -69,8 +67,8 @@ func NewRequesterState(requesterName string, caPrefix string, ndnEngine ndn.Engi
 		ecdhState:       &ecdhState,
 		certKey:         certKey,
 		challengeStatus: ChallengeStatusBeforeChallenge,
+		interestSigner:  sec.NewSha256IntSigner(ndnTimer),
 		ndnEngine:       ndnEngine,
-		ndnTimer:        ndnTimer,
 	}, nil
 }
 
@@ -135,7 +133,7 @@ func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64
 		EcdhPub:     requester.ecdhState.PublicKey.Bytes(),
 		CertRequest: certRequest.Join(),
 	}
-	newInterestWire, newInterestFinalName, makeInterestError := makeInterestPacket(newInterestName, newInterestAppParameters.Encode(), requester.ndnTimer)
+	newInterestWire, newInterestFinalName, makeInterestError := makeInterestPacket(newInterestName, newInterestAppParameters.Encode(), requester.interestSigner)
 	if makeInterestError != nil {
 		logger.Error("Encountered error making interest for new interest")
 		return makeInterestError
@@ -195,7 +193,7 @@ func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeInterestWire, challengeInterestFinalName, makeInterestError := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requester.ndnTimer)
+	challengeInterestWire, challengeInterestFinalName, makeInterestError := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requester.interestSigner)
 	if makeInterestError != nil {
 		logger.Error("Encountered error making interest for email choice challenge interest")
 		return makeInterestError
@@ -266,7 +264,7 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) er
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeInterestWire, challengeInterestFinalName, makeInterestError := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requester.ndnTimer)
+	challengeInterestWire, challengeInterestFinalName, makeInterestError := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requester.interestSigner)
 	if makeInterestError != nil {
 		logger.Error("Encountered error making interest for email code challenge interest")
 		return makeInterestError
@@ -312,7 +310,7 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) er
 	return nil
 }
 
-func makeInterestPacket(interestName enc.Name, appParameters enc.Wire, ndnTimer ndn.Timer) (enc.Wire, enc.Name, error) {
+func makeInterestPacket(interestName enc.Name, appParameters enc.Wire, ndnSigner ndn.Signer) (enc.Wire, enc.Name, error) {
 	interestWire, _, finalName, makeInterestError := spec_2022.Spec{}.MakeInterest(
 		interestName,
 		&ndn.InterestConfig{
@@ -320,7 +318,7 @@ func makeInterestPacket(interestName enc.Name, appParameters enc.Wire, ndnTimer 
 			MustBeFresh: true,
 		},
 		appParameters,
-		sec.NewSha256IntSigner(ndnTimer))
+		ndnSigner)
 	if makeInterestError != nil {
 		return nil, nil, makeInterestError
 	}

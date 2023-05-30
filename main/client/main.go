@@ -31,7 +31,7 @@ func main() {
 	}
 	defer ndnEngine.Shutdown()
 
-	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla", ndnEngine, ndnTimer)
+	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", ndnEngine, ndnTimer)
 	requesterState.ExpressNewInterest(86400)
 	requesterState.ExpressEmailChoiceChallenge("ricky99.guo@gmail.com")
 
