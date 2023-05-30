@@ -142,7 +142,6 @@ func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
-	logger.Infof("Requester state challenge status: %d", requester.challengeStatus)
 	ch := make(chan struct{})
 	expressError := requester.ndnEngine.Express(newInterestFinalName, interestConfig, newInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
