@@ -34,17 +34,19 @@ const (
 )
 
 type requesterState struct {
-	requesterName   string
 	caPrefix        string
-	ecdhState       *crypto.ECDHState
 	certKey         *ecdsa.PrivateKey
 	challengeStatus ChallengeStatus
+	ecdhState       *crypto.ECDHState
+	ndnEngine       ndn.Engine
+	ndnTimer        ndn.Timer
+	requesterName   string
 
 	requestId    RequestId
 	symmetricKey [16]byte
 }
 
-func NewRequesterState(requesterName string, caPrefix string) *requesterState {
+func NewRequesterState(requesterName string, caPrefix string, ndnEngine ndn.Engine, ndnTimer ndn.Timer) *requesterState {
 	// TODO: Add implementation for notBefore and notAfter step
 	// TODO: Switch to using x.509 certificate format
 	logger := log.WithField("module", "requester")
@@ -55,7 +57,7 @@ func NewRequesterState(requesterName string, caPrefix string) *requesterState {
 	ecdhState.GenerateKeyPair()
 
 	// Generate ECDSA key used for signing
-	certKey, certKeyError := ecdsa.GenerateKey(elliptic.P224(), crand.Reader)
+	certKey, certKeyError := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
 	if certKeyError != nil {
 		logger.Fatalf("Failed to generate certificate private key using ecdsa")
 	}
@@ -66,6 +68,8 @@ func NewRequesterState(requesterName string, caPrefix string) *requesterState {
 		ecdhState:       &ecdhState,
 		certKey:         certKey,
 		challengeStatus: ChallengeStatusBeforeChallenge,
+		ndnEngine:       ndnEngine,
+		ndnTimer:        ndnTimer,
 	}
 }
 
@@ -95,7 +99,7 @@ func ExpressInfoInterest(ndnEngine ndn.Engine, caPrefix string) ([]byte, error) 
 	return callResult.Content.Join(), nil
 }
 
-func (requesterState *requesterState) ExpressNewInterest(ndnEngine ndn.Engine) error {
+func (requesterState *requesterState) ExpressNewInterest() error {
 	logger := log.WithField(
 		"module", "requester",
 	)
@@ -122,10 +126,11 @@ func (requesterState *requesterState) ExpressNewInterest(ndnEngine ndn.Engine) e
 			FinalBlockID: nil,
 		},
 		enc.Wire{publicKeyEncoding},
-		sec.NewEmptySigner(),
+		sec.NewEccSigner(true, false, time.Hour*24, requesterState.certKey, certName),
+		//sec.NewEmptySigner(),
 	)
 	if certRequestError != nil {
-		logger.Fatal("Failed to generate the certificate")
+		logger.Fatalf("Failed to generate the certificate: %s", certRequestError.Error())
 		return certRequestError
 	}
 
@@ -134,14 +139,14 @@ func (requesterState *requesterState) ExpressNewInterest(ndnEngine ndn.Engine) e
 		EcdhPub:     requesterState.ecdhState.PublicKey.Bytes(),
 		CertRequest: certRequest.Join(),
 	}
-	newInterestWire, newInterestFinalName := makeInterestPacket(newInterestName, newInterestAppParameters.Encode())
+	newInterestWire, newInterestFinalName := makeInterestPacket(newInterestName, newInterestAppParameters.Encode(), requesterState.ndnTimer)
 	interestConfig := &ndn.InterestConfig{
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
 	logger.Infof("Requester state challenge status: %d", requesterState.challengeStatus)
 	ch := make(chan struct{})
-	expressError := ndnEngine.Express(newInterestFinalName, interestConfig, newInterestWire,
+	expressError := requesterState.ndnEngine.Express(newInterestFinalName, interestConfig, newInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
 			switch requesterState.challengeStatus {
 			case ChallengeStatusBeforeChallenge:
@@ -164,7 +169,7 @@ func (requesterState *requesterState) ExpressNewInterest(ndnEngine ndn.Engine) e
 	return nil
 }
 
-func (requesterState *requesterState) ExpressEmailChoiceChallenge(ndnEngine ndn.Engine, emailAddress string) error {
+func (requesterState *requesterState) ExpressEmailChoiceChallenge(emailAddress string) error {
 	logger := log.WithField("module", "requester")
 	logger.Infof("Generating an email code choice challenge with email: %s", emailAddress)
 	logger.Infof("Requester state challenge status: %d", requesterState.challengeStatus)
@@ -188,13 +193,13 @@ func (requesterState *requesterState) ExpressEmailChoiceChallenge(ndnEngine ndn.
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode())
+	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requesterState.ndnTimer)
 	interestConfig := &ndn.InterestConfig{
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
 	ch := make(chan struct{})
-	expressError := ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
+	expressError := requesterState.ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
 			encryptedMessage := crypto.EncryptedMessage{
@@ -224,7 +229,7 @@ func (requesterState *requesterState) ExpressEmailChoiceChallenge(ndnEngine ndn.
 	return nil
 }
 
-func (requesterState *requesterState) ExpressEmailCodeChallenge(ndnEngine ndn.Engine, secretCode string) error {
+func (requesterState *requesterState) ExpressEmailCodeChallenge(secretCode string) error {
 	logger := log.WithField("module", "requester")
 	if requesterState.challengeStatus != ChallengeStatusAfterSelectionChallengeData {
 		logger.Error("Bad attempt to generate email code challenge: does not follow email choice challenge")
@@ -249,13 +254,13 @@ func (requesterState *requesterState) ExpressEmailCodeChallenge(ndnEngine ndn.En
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode())
+	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requesterState.ndnTimer)
 	interestConfig := &ndn.InterestConfig{
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
 	ch := make(chan struct{})
-	expressError := ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
+	expressError := requesterState.ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
 			encryptedMessage := crypto.EncryptedMessage{
@@ -285,7 +290,7 @@ func (requesterState *requesterState) ExpressEmailCodeChallenge(ndnEngine ndn.En
 	return nil
 }
 
-func makeInterestPacket(interestName enc.Name, appParameters enc.Wire) (enc.Wire, enc.Name) {
+func makeInterestPacket(interestName enc.Name, appParameters enc.Wire, ndnTimer ndn.Timer) (enc.Wire, enc.Name) {
 	interestWire, _, finalName, makeInterestError := spec_2022.Spec{}.MakeInterest(
 		interestName,
 		&ndn.InterestConfig{
@@ -293,7 +298,7 @@ func makeInterestPacket(interestName enc.Name, appParameters enc.Wire) (enc.Wire
 			MustBeFresh: true,
 		},
 		appParameters,
-		sec.NewSha256Signer())
+		sec.NewSha256IntSigner(ndnTimer))
 	if makeInterestError != nil {
 		log.WithField("module", "requester").Fatalf("Failed to make interest packet")
 	}

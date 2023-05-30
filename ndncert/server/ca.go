@@ -274,6 +274,13 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		return
 	}
 
+	publicKey, publicKeyParsingError := crypto.ParsePublicKey(certRequestData.Content().Join())
+	if publicKeyParsingError != nil {
+		logger.Error("Could not parse the public key from data payload")
+		return
+	}
+	logger.Infof("Received public key: %s", publicKey)
+
 	//notBefore, notAfter := certRequestData.Signature().Validity()
 
 	// TODO: add state for this - Specifically, the NotBefore field and NotAfter field in the certificate request should satisfy

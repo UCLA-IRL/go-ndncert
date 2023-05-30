@@ -40,13 +40,13 @@ func main() {
 	//	fmt.Print(infoWire)
 	//}
 
-	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla")
-	requesterState.ExpressNewInterest(ndnEngine)
-	requesterState.ExpressEmailChoiceChallenge(ndnEngine, "ricky99.guo@gmail.com")
+	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla", ndnEngine, ndnTimer)
+	requesterState.ExpressNewInterest()
+	requesterState.ExpressEmailChoiceChallenge("ricky99.guo@gmail.com")
 
 	fmt.Print("Enter the secret code you received to your email: ")
 	bytePassword, _ := term.ReadPassword(syscall.Stdin)
-	requesterState.ExpressEmailCodeChallenge(ndnEngine, string(bytePassword))
+	requesterState.ExpressEmailCodeChallenge(string(bytePassword))
 
 	// Prompt client for the email address to send the secret code to
 	//for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {
