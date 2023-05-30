@@ -8,6 +8,7 @@ import (
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"go-ndncert/ndncert/client"
+	"golang.org/x/term"
 	"os"
 	"os/signal"
 	"syscall"
@@ -42,6 +43,10 @@ func main() {
 	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla")
 	requesterState.ExpressNewInterest(ndnEngine)
 	requesterState.ExpressEmailChoiceChallenge(ndnEngine, "ricky99.guo@gmail.com")
+
+	fmt.Print("Enter the secret code you received to your email: ")
+	bytePassword, _ := term.ReadPassword(syscall.Stdin)
+	requesterState.ExpressEmailCodeChallenge(ndnEngine, string(bytePassword))
 
 	// Prompt client for the email address to send the secret code to
 	//for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {

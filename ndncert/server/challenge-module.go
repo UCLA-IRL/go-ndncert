@@ -10,8 +10,8 @@ import (
 var maxAttempts uint64 = 3
 
 const (
-	secretLifetime   int64 = 300 // in seconds
-	SecretCodeLength int   = 6
+	secretLifetime   uint64 = 300 // in seconds
+	SecretCodeLength int    = 6
 )
 
 type ChallengeState struct {

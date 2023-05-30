@@ -1310,12 +1310,38 @@ func ParseEncryptedMessage(reader enc.ParseReader, ignoreCritical bool) (*Encryp
 
 type ChallengeInterestPlaintextEncoder struct {
 	length uint
+
+	Parameters_valencoder map[string]*struct {
+	}
 }
 
 type ChallengeInterestPlaintextParsingContext struct {
 }
 
 func (encoder *ChallengeInterestPlaintextEncoder) Init(value *ChallengeInterestPlaintext) {
+
+	{
+		Parameters_l := len(value.Parameters)
+		encoder.Parameters_valencoder = make(map[string]*struct {
+		}, Parameters_l)
+		for map_k := range value.Parameters {
+			pseudoEncoder := &struct {
+			}{}
+			encoder.Parameters_valencoder[map_k] = pseudoEncoder
+			pseudoValue := struct {
+				Parameters_v []byte
+			}{
+				Parameters_v: value.Parameters[map_k],
+			}
+			{
+				encoder := pseudoEncoder
+				value := &pseudoValue
+
+				_ = encoder
+				_ = value
+			}
+		}
+	}
 
 	l := uint(0)
 	l += 1
@@ -1330,6 +1356,53 @@ func (encoder *ChallengeInterestPlaintextEncoder) Init(value *ChallengeInterestP
 		l += 9
 	}
 	l += uint(len(value.SelectedChallenge))
+
+	if value.Parameters != nil {
+		for map_k, map_v := range value.Parameters {
+			pseudoEncoder := encoder.Parameters_valencoder[map_k]
+			pseudoValue := struct {
+				Parameters_k string
+				Parameters_v []byte
+			}{
+				Parameters_k: map_k,
+				Parameters_v: map_v,
+			}
+			{
+				encoder := pseudoEncoder
+				value := &pseudoValue
+				l += 1
+				switch x := len(value.Parameters_k); {
+				case x <= 0xfc:
+					l += 1
+				case x <= 0xffff:
+					l += 3
+				case x <= 0xffffffff:
+					l += 5
+				default:
+					l += 9
+				}
+				l += uint(len(value.Parameters_k))
+
+				if value.Parameters_v != nil {
+					l += 1
+					switch x := len(value.Parameters_v); {
+					case x <= 0xfc:
+						l += 1
+					case x <= 0xffff:
+						l += 3
+					case x <= 0xffffffff:
+						l += 5
+					default:
+						l += 9
+					}
+					l += uint(len(value.Parameters_v))
+				}
+
+				_ = encoder
+				_ = value
+			}
+		}
+	}
 
 	encoder.length = l
 
@@ -1363,6 +1436,71 @@ func (encoder *ChallengeInterestPlaintextEncoder) EncodeInto(value *ChallengeInt
 	}
 	copy(buf[pos:], value.SelectedChallenge)
 	pos += uint(len(value.SelectedChallenge))
+
+	if value.Parameters != nil {
+		for map_k, map_v := range value.Parameters {
+			pseudoEncoder := encoder.Parameters_valencoder[map_k]
+			pseudoValue := struct {
+				Parameters_k string
+				Parameters_v []byte
+			}{
+				Parameters_k: map_k,
+				Parameters_v: map_v,
+			}
+			{
+				encoder := pseudoEncoder
+				value := &pseudoValue
+				buf[pos] = byte(133)
+				pos += 1
+				switch x := len(value.Parameters_k); {
+				case x <= 0xfc:
+					buf[pos] = byte(x)
+					pos += 1
+				case x <= 0xffff:
+					buf[pos] = 0xfd
+					binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+					pos += 3
+				case x <= 0xffffffff:
+					buf[pos] = 0xfe
+					binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+					pos += 5
+				default:
+					buf[pos] = 0xff
+					binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+					pos += 9
+				}
+				copy(buf[pos:], value.Parameters_k)
+				pos += uint(len(value.Parameters_k))
+
+				if value.Parameters_v != nil {
+					buf[pos] = byte(135)
+					pos += 1
+					switch x := len(value.Parameters_v); {
+					case x <= 0xfc:
+						buf[pos] = byte(x)
+						pos += 1
+					case x <= 0xffff:
+						buf[pos] = 0xfd
+						binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+						pos += 3
+					case x <= 0xffffffff:
+						buf[pos] = 0xfe
+						binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+						pos += 5
+					default:
+						buf[pos] = 0xff
+						binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+						pos += 9
+					}
+					copy(buf[pos:], value.Parameters_v)
+					pos += uint(len(value.Parameters_v))
+				}
+
+				_ = encoder
+				_ = value
+			}
+		}
+	}
 
 }
 
@@ -1414,6 +1552,50 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 					}
 
 				}
+			case 133:
+				if progress+1 == 1 {
+					handled = true
+					if value.Parameters == nil {
+						value.Parameters = make(map[string][]byte)
+					}
+					{
+						pseudoValue := struct {
+							Parameters_k string
+							Parameters_v []byte
+						}{}
+						{
+							value := &pseudoValue
+							{
+								var builder strings.Builder
+								_, err = io.CopyN(&builder, reader, int64(l))
+								if err == nil {
+									value.Parameters_k = builder.String()
+								}
+							}
+
+							typ := enc.TLNum(0)
+							l := enc.TLNum(0)
+							typ, err = enc.ReadTLNum(reader)
+							if err != nil {
+								return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
+							}
+							l, err = enc.ReadTLNum(reader)
+							if err != nil {
+								return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
+							}
+							if typ != 135 {
+								return nil, enc.ErrFailToParse{TypeNum: 133, Err: enc.ErrUnrecognizedField{TypeNum: typ}}
+							}
+							value.Parameters_v = make([]byte, l)
+							_, err = io.ReadFull(reader, value.Parameters_v)
+
+							_ = value
+						}
+						value.Parameters[pseudoValue.Parameters_k] = pseudoValue.Parameters_v
+					}
+					progress--
+
+				}
 			default:
 				handled = true
 				if !ignoreCritical && ((typ <= 31) || ((typ & 1) == 1)) {
@@ -1425,6 +1607,8 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 				switch progress {
 				case 0 - 1:
 					err = enc.ErrSkipRequired{Name: "SelectedChallenge", TypeNum: 161}
+				case 1 - 1:
+
 				}
 			}
 			if err != nil {
@@ -1433,10 +1617,12 @@ func (context *ChallengeInterestPlaintextParsingContext) Parse(reader enc.ParseR
 		}
 	}
 	startPos = reader.Pos()
-	for ; progress < 1; progress++ {
+	for ; progress < 2; progress++ {
 		switch progress {
 		case 0 - 1:
 			err = enc.ErrSkipRequired{Name: "SelectedChallenge", TypeNum: 161}
+		case 1 - 1:
+
 		}
 	}
 	if err != nil {
@@ -1466,6 +1652,8 @@ type ChallengeDataPlaintextEncoder struct {
 
 	IssuedCertificateName_length uint
 	ForwardingHint_length        uint
+	Parameters_valencoder        map[string]*struct {
+	}
 }
 
 type ChallengeDataPlaintextParsingContext struct {
@@ -1484,6 +1672,29 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		encoder.ForwardingHint_length = 0
 		for _, c := range value.ForwardingHint {
 			encoder.ForwardingHint_length += uint(c.EncodingLength())
+		}
+	}
+
+	{
+		Parameters_l := len(value.Parameters)
+		encoder.Parameters_valencoder = make(map[string]*struct {
+		}, Parameters_l)
+		for map_k := range value.Parameters {
+			pseudoEncoder := &struct {
+			}{}
+			encoder.Parameters_valencoder[map_k] = pseudoEncoder
+			pseudoValue := struct {
+				Parameters_v []byte
+			}{
+				Parameters_v: value.Parameters[map_k],
+			}
+			{
+				encoder := pseudoEncoder
+				value := &pseudoValue
+
+				_ = encoder
+				_ = value
+			}
 		}
 	}
 
@@ -1512,6 +1723,34 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		l += 9
 	}
 	l += uint(len(value.ChallengeStatus))
+
+	if value.RemainingTries != nil {
+		l += 1
+		switch x := *value.RemainingTries; {
+		case x <= 0xff:
+			l += 2
+		case x <= 0xffff:
+			l += 3
+		case x <= 0xffffffff:
+			l += 5
+		default:
+			l += 9
+		}
+	}
+
+	if value.RemainingTime != nil {
+		l += 1
+		switch x := *value.RemainingTime; {
+		case x <= 0xff:
+			l += 2
+		case x <= 0xffff:
+			l += 3
+		case x <= 0xffffffff:
+			l += 5
+		default:
+			l += 9
+		}
+	}
 
 	if value.IssuedCertificateName != nil {
 		l += 1
@@ -1543,31 +1782,50 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 		l += encoder.ForwardingHint_length
 	}
 
-	if value.RemainingTries != nil {
-		l += 1
-		switch x := *value.RemainingTries; {
-		case x <= 0xff:
-			l += 2
-		case x <= 0xffff:
-			l += 3
-		case x <= 0xffffffff:
-			l += 5
-		default:
-			l += 9
-		}
-	}
+	if value.Parameters != nil {
+		for map_k, map_v := range value.Parameters {
+			pseudoEncoder := encoder.Parameters_valencoder[map_k]
+			pseudoValue := struct {
+				Parameters_k string
+				Parameters_v []byte
+			}{
+				Parameters_k: map_k,
+				Parameters_v: map_v,
+			}
+			{
+				encoder := pseudoEncoder
+				value := &pseudoValue
+				l += 1
+				switch x := len(value.Parameters_k); {
+				case x <= 0xfc:
+					l += 1
+				case x <= 0xffff:
+					l += 3
+				case x <= 0xffffffff:
+					l += 5
+				default:
+					l += 9
+				}
+				l += uint(len(value.Parameters_k))
 
-	if value.RemainingTime != nil {
-		l += 1
-		switch x := *value.RemainingTime; {
-		case x <= 0xff:
-			l += 2
-		case x <= 0xffff:
-			l += 3
-		case x <= 0xffffffff:
-			l += 5
-		default:
-			l += 9
+				if value.Parameters_v != nil {
+					l += 1
+					switch x := len(value.Parameters_v); {
+					case x <= 0xfc:
+						l += 1
+					case x <= 0xffff:
+						l += 3
+					case x <= 0xffffffff:
+						l += 5
+					default:
+						l += 9
+					}
+					l += uint(len(value.Parameters_v))
+				}
+
+				_ = encoder
+				_ = value
+			}
 		}
 	}
 
@@ -1625,6 +1883,52 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 	copy(buf[pos:], value.ChallengeStatus)
 	pos += uint(len(value.ChallengeStatus))
 
+	if value.RemainingTries != nil {
+		buf[pos] = byte(165)
+		pos += 1
+		switch x := *value.RemainingTries; {
+		case x <= 0xff:
+			buf[pos] = 1
+			buf[pos+1] = byte(x)
+			pos += 2
+		case x <= 0xffff:
+			buf[pos] = 2
+			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+			pos += 3
+		case x <= 0xffffffff:
+			buf[pos] = 4
+			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+			pos += 5
+		default:
+			buf[pos] = 8
+			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+			pos += 9
+		}
+	}
+
+	if value.RemainingTime != nil {
+		buf[pos] = byte(167)
+		pos += 1
+		switch x := *value.RemainingTime; {
+		case x <= 0xff:
+			buf[pos] = 1
+			buf[pos+1] = byte(x)
+			pos += 2
+		case x <= 0xffff:
+			buf[pos] = 2
+			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+			pos += 3
+		case x <= 0xffffffff:
+			buf[pos] = 4
+			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+			pos += 5
+		default:
+			buf[pos] = 8
+			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+			pos += 9
+		}
+	}
+
 	if value.IssuedCertificateName != nil {
 		buf[pos] = byte(169)
 		pos += 1
@@ -1675,49 +1979,68 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 		}
 	}
 
-	if value.RemainingTries != nil {
-		buf[pos] = byte(165)
-		pos += 1
-		switch x := *value.RemainingTries; {
-		case x <= 0xff:
-			buf[pos] = 1
-			buf[pos+1] = byte(x)
-			pos += 2
-		case x <= 0xffff:
-			buf[pos] = 2
-			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-			pos += 3
-		case x <= 0xffffffff:
-			buf[pos] = 4
-			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-			pos += 5
-		default:
-			buf[pos] = 8
-			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-			pos += 9
-		}
-	}
+	if value.Parameters != nil {
+		for map_k, map_v := range value.Parameters {
+			pseudoEncoder := encoder.Parameters_valencoder[map_k]
+			pseudoValue := struct {
+				Parameters_k string
+				Parameters_v []byte
+			}{
+				Parameters_k: map_k,
+				Parameters_v: map_v,
+			}
+			{
+				encoder := pseudoEncoder
+				value := &pseudoValue
+				buf[pos] = byte(133)
+				pos += 1
+				switch x := len(value.Parameters_k); {
+				case x <= 0xfc:
+					buf[pos] = byte(x)
+					pos += 1
+				case x <= 0xffff:
+					buf[pos] = 0xfd
+					binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+					pos += 3
+				case x <= 0xffffffff:
+					buf[pos] = 0xfe
+					binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+					pos += 5
+				default:
+					buf[pos] = 0xff
+					binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+					pos += 9
+				}
+				copy(buf[pos:], value.Parameters_k)
+				pos += uint(len(value.Parameters_k))
 
-	if value.RemainingTime != nil {
-		buf[pos] = byte(167)
-		pos += 1
-		switch x := *value.RemainingTime; {
-		case x <= 0xff:
-			buf[pos] = 1
-			buf[pos+1] = byte(x)
-			pos += 2
-		case x <= 0xffff:
-			buf[pos] = 2
-			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-			pos += 3
-		case x <= 0xffffffff:
-			buf[pos] = 4
-			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-			pos += 5
-		default:
-			buf[pos] = 8
-			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-			pos += 9
+				if value.Parameters_v != nil {
+					buf[pos] = byte(135)
+					pos += 1
+					switch x := len(value.Parameters_v); {
+					case x <= 0xfc:
+						buf[pos] = byte(x)
+						pos += 1
+					case x <= 0xffff:
+						buf[pos] = 0xfd
+						binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+						pos += 3
+					case x <= 0xffffffff:
+						buf[pos] = 0xfe
+						binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+						pos += 5
+					default:
+						buf[pos] = 0xff
+						binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+						pos += 9
+					}
+					copy(buf[pos:], value.Parameters_v)
+					pos += uint(len(value.Parameters_v))
+				}
+
+				_ = encoder
+				_ = value
+			}
 		}
 	}
 
@@ -1789,8 +2112,54 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 					}
 
 				}
-			case 169:
+			case 165:
 				if progress+1 == 2 {
+					handled = true
+					{
+						tempVal := uint64(0)
+						tempVal = uint64(0)
+						{
+							for i := 0; i < int(l); i++ {
+								x := byte(0)
+								x, err = reader.ReadByte()
+								if err != nil {
+									if err == io.EOF {
+										err = io.ErrUnexpectedEOF
+									}
+									break
+								}
+								tempVal = uint64(tempVal<<8) | uint64(x)
+							}
+						}
+						value.RemainingTries = &tempVal
+					}
+
+				}
+			case 167:
+				if progress+1 == 3 {
+					handled = true
+					{
+						tempVal := uint64(0)
+						tempVal = uint64(0)
+						{
+							for i := 0; i < int(l); i++ {
+								x := byte(0)
+								x, err = reader.ReadByte()
+								if err != nil {
+									if err == io.EOF {
+										err = io.ErrUnexpectedEOF
+									}
+									break
+								}
+								tempVal = uint64(tempVal<<8) | uint64(x)
+							}
+						}
+						value.RemainingTime = &tempVal
+					}
+
+				}
+			case 169:
+				if progress+1 == 4 {
 					handled = true
 					value.IssuedCertificateName = make(enc.Name, l/2+1)
 					startName := reader.Pos()
@@ -1815,7 +2184,7 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 
 				}
 			case 30:
-				if progress+1 == 3 {
+				if progress+1 == 5 {
 					handled = true
 					value.ForwardingHint = make(enc.Name, l/2+1)
 					startName := reader.Pos()
@@ -1839,50 +2208,48 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 					}
 
 				}
-			case 165:
-				if progress+1 == 4 {
+			case 133:
+				if progress+1 == 6 {
 					handled = true
-					{
-						tempVal := uint64(0)
-						tempVal = uint64(0)
-						{
-							for i := 0; i < int(l); i++ {
-								x := byte(0)
-								x, err = reader.ReadByte()
-								if err != nil {
-									if err == io.EOF {
-										err = io.ErrUnexpectedEOF
-									}
-									break
-								}
-								tempVal = uint64(tempVal<<8) | uint64(x)
-							}
-						}
-						value.RemainingTries = &tempVal
+					if value.Parameters == nil {
+						value.Parameters = make(map[string][]byte)
 					}
+					{
+						pseudoValue := struct {
+							Parameters_k string
+							Parameters_v []byte
+						}{}
+						{
+							value := &pseudoValue
+							{
+								var builder strings.Builder
+								_, err = io.CopyN(&builder, reader, int64(l))
+								if err == nil {
+									value.Parameters_k = builder.String()
+								}
+							}
 
-				}
-			case 167:
-				if progress+1 == 5 {
-					handled = true
-					{
-						tempVal := uint64(0)
-						tempVal = uint64(0)
-						{
-							for i := 0; i < int(l); i++ {
-								x := byte(0)
-								x, err = reader.ReadByte()
-								if err != nil {
-									if err == io.EOF {
-										err = io.ErrUnexpectedEOF
-									}
-									break
-								}
-								tempVal = uint64(tempVal<<8) | uint64(x)
+							typ := enc.TLNum(0)
+							l := enc.TLNum(0)
+							typ, err = enc.ReadTLNum(reader)
+							if err != nil {
+								return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
 							}
+							l, err = enc.ReadTLNum(reader)
+							if err != nil {
+								return nil, enc.ErrFailToParse{TypeNum: 0, Err: err}
+							}
+							if typ != 135 {
+								return nil, enc.ErrFailToParse{TypeNum: 133, Err: enc.ErrUnrecognizedField{TypeNum: typ}}
+							}
+							value.Parameters_v = make([]byte, l)
+							_, err = io.ReadFull(reader, value.Parameters_v)
+
+							_ = value
 						}
-						value.RemainingTime = &tempVal
+						value.Parameters[pseudoValue.Parameters_k] = pseudoValue.Parameters_v
 					}
+					progress--
 
 				}
 			default:
@@ -1899,13 +2266,15 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 				case 1 - 1:
 					err = enc.ErrSkipRequired{Name: "ChallengeStatus", TypeNum: 163}
 				case 2 - 1:
-					value.IssuedCertificateName = nil
-				case 3 - 1:
-					value.ForwardingHint = nil
-				case 4 - 1:
 					value.RemainingTries = nil
-				case 5 - 1:
+				case 3 - 1:
 					value.RemainingTime = nil
+				case 4 - 1:
+					value.IssuedCertificateName = nil
+				case 5 - 1:
+					value.ForwardingHint = nil
+				case 6 - 1:
+
 				}
 			}
 			if err != nil {
@@ -1914,20 +2283,22 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 		}
 	}
 	startPos = reader.Pos()
-	for ; progress < 6; progress++ {
+	for ; progress < 7; progress++ {
 		switch progress {
 		case 0 - 1:
 			err = enc.ErrSkipRequired{Name: "Status", TypeNum: 155}
 		case 1 - 1:
 			err = enc.ErrSkipRequired{Name: "ChallengeStatus", TypeNum: 163}
 		case 2 - 1:
-			value.IssuedCertificateName = nil
-		case 3 - 1:
-			value.ForwardingHint = nil
-		case 4 - 1:
 			value.RemainingTries = nil
-		case 5 - 1:
+		case 3 - 1:
 			value.RemainingTime = nil
+		case 4 - 1:
+			value.IssuedCertificateName = nil
+		case 5 - 1:
+			value.ForwardingHint = nil
+		case 6 - 1:
+
 		}
 	}
 	if err != nil {

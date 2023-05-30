@@ -366,9 +366,10 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 			}
 			if challengeRequestState.challengeState == nil {
 				challengeRequestState.challengeState = NewChallengeState()
+				fmt.Printf("Challenge state created with remaining time (sec): %d", challengeRequestState.challengeState.Expiry.Second())
 			}
 			emailChallengeState, sendEmailStatus := NewEmailChallenge(caState.SmtpModule, string(emailAddress))
-			remainingTimeUint64 := uint64(challengeRequestState.challengeState.Expiry.Second())
+			remainingTimeUint64 := uint64(challengeRequestState.challengeState.Expiry.Sub(time.Now()).Seconds())
 			if sendEmailStatus == email.StatusInvalidEmail {
 				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
 				challengeRequestState.challengeState.RemainingAttempts -= 1
@@ -420,7 +421,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 				return
 			}
-			if challengeRequestState.challengeState.Expiry.After(time.Now()) {
+			if challengeRequestState.challengeState.Expiry.Before(time.Now()) {
 				logger.Error("Requester has run out of time")
 				replyWithError(ErrorCodeRunOutOfTime, interest.Name(), reply)
 				delete(caState.ChallengeRequestStateMapping, requestId)
