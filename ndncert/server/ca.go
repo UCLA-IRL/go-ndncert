@@ -274,7 +274,7 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		return
 	}
 
-	publicKey, publicKeyParsingError := crypto.ParsePublicKey(certRequestData.Content().Join())
+	publicKey, publicKeyParsingError := crypto.ParseCertificate(certRequestData.Content().Join())
 	if publicKeyParsingError != nil {
 		logger.Error("Could not parse the public key from data payload")
 		return

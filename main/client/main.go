@@ -9,8 +9,6 @@ import (
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"go-ndncert/ndncert/client"
 	"golang.org/x/term"
-	"os"
-	"os/signal"
 	"syscall"
 )
 
@@ -33,37 +31,11 @@ func main() {
 	}
 	defer ndnEngine.Shutdown()
 
-	//infoWire, err := client.ExpressInfoInterest(ndnEngine, "/ndn/edu/ucla")
-	//if err != nil {
-	//	fmt.Print(err.Error())
-	//} else {
-	//	fmt.Print(infoWire)
-	//}
-
 	requesterState := client.NewRequesterState("client", "/ndn/edu/ucla", ndnEngine, ndnTimer)
-	requesterState.ExpressNewInterest()
+	requesterState.ExpressNewInterest(86400)
 	requesterState.ExpressEmailChoiceChallenge("ricky99.guo@gmail.com")
 
 	fmt.Print("Enter the secret code you received to your email: ")
 	bytePassword, _ := term.ReadPassword(syscall.Stdin)
 	requesterState.ExpressEmailCodeChallenge(string(bytePassword))
-
-	// Prompt client for the email address to send the secret code to
-	//for requesterState.ChallengeStatus == client.ChallengeStatusAfterNewData {
-	//	var emailAddress string
-	//	fmt.Print("Enter the email address you wish to send the secret code to: ")
-	//	fmt.Scan(&emailAddress)
-	//	requesterState.ExpressEmailChoiceChallenge(ndnEngine, emailAddress)
-	//}
-
-	// Prompt client for the secret code from the email
-	//fmt.Print("Enter the secret code you received from your email: ")
-	//_ := client.NewRequesterState(/*)*/
-
-	//Wait for keyboard quit signal
-	sigChannel := make(chan os.Signal, 1)
-	fmt.Print("Start serving ...\n")
-	signal.Notify(sigChannel, os.Interrupt, syscall.SIGTERM)
-	receivedSig := <-sigChannel
-	logger.Infof("Received signal %+v - exiting\n", receivedSig)
 }

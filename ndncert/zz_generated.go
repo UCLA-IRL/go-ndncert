@@ -1652,7 +1652,8 @@ type ChallengeDataPlaintextEncoder struct {
 
 	IssuedCertificateName_length uint
 	ForwardingHint_length        uint
-	Parameters_valencoder        map[string]*struct {
+
+	Parameters_valencoder map[string]*struct {
 	}
 }
 
@@ -1724,34 +1725,6 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 	}
 	l += uint(len(value.ChallengeStatus))
 
-	if value.RemainingTries != nil {
-		l += 1
-		switch x := *value.RemainingTries; {
-		case x <= 0xff:
-			l += 2
-		case x <= 0xffff:
-			l += 3
-		case x <= 0xffffffff:
-			l += 5
-		default:
-			l += 9
-		}
-	}
-
-	if value.RemainingTime != nil {
-		l += 1
-		switch x := *value.RemainingTime; {
-		case x <= 0xff:
-			l += 2
-		case x <= 0xffff:
-			l += 3
-		case x <= 0xffffffff:
-			l += 5
-		default:
-			l += 9
-		}
-	}
-
 	if value.IssuedCertificateName != nil {
 		l += 1
 		switch x := encoder.IssuedCertificateName_length; {
@@ -1780,6 +1753,34 @@ func (encoder *ChallengeDataPlaintextEncoder) Init(value *ChallengeDataPlaintext
 			l += 9
 		}
 		l += encoder.ForwardingHint_length
+	}
+
+	if value.RemainingTries != nil {
+		l += 1
+		switch x := *value.RemainingTries; {
+		case x <= 0xff:
+			l += 2
+		case x <= 0xffff:
+			l += 3
+		case x <= 0xffffffff:
+			l += 5
+		default:
+			l += 9
+		}
+	}
+
+	if value.RemainingTime != nil {
+		l += 1
+		switch x := *value.RemainingTime; {
+		case x <= 0xff:
+			l += 2
+		case x <= 0xffff:
+			l += 3
+		case x <= 0xffffffff:
+			l += 5
+		default:
+			l += 9
+		}
 	}
 
 	if value.Parameters != nil {
@@ -1883,52 +1884,6 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 	copy(buf[pos:], value.ChallengeStatus)
 	pos += uint(len(value.ChallengeStatus))
 
-	if value.RemainingTries != nil {
-		buf[pos] = byte(165)
-		pos += 1
-		switch x := *value.RemainingTries; {
-		case x <= 0xff:
-			buf[pos] = 1
-			buf[pos+1] = byte(x)
-			pos += 2
-		case x <= 0xffff:
-			buf[pos] = 2
-			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-			pos += 3
-		case x <= 0xffffffff:
-			buf[pos] = 4
-			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-			pos += 5
-		default:
-			buf[pos] = 8
-			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-			pos += 9
-		}
-	}
-
-	if value.RemainingTime != nil {
-		buf[pos] = byte(167)
-		pos += 1
-		switch x := *value.RemainingTime; {
-		case x <= 0xff:
-			buf[pos] = 1
-			buf[pos+1] = byte(x)
-			pos += 2
-		case x <= 0xffff:
-			buf[pos] = 2
-			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
-			pos += 3
-		case x <= 0xffffffff:
-			buf[pos] = 4
-			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
-			pos += 5
-		default:
-			buf[pos] = 8
-			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
-			pos += 9
-		}
-	}
-
 	if value.IssuedCertificateName != nil {
 		buf[pos] = byte(169)
 		pos += 1
@@ -1976,6 +1931,52 @@ func (encoder *ChallengeDataPlaintextEncoder) EncodeInto(value *ChallengeDataPla
 		}
 		for _, c := range value.ForwardingHint {
 			pos += uint(c.EncodeInto(buf[pos:]))
+		}
+	}
+
+	if value.RemainingTries != nil {
+		buf[pos] = byte(165)
+		pos += 1
+		switch x := *value.RemainingTries; {
+		case x <= 0xff:
+			buf[pos] = 1
+			buf[pos+1] = byte(x)
+			pos += 2
+		case x <= 0xffff:
+			buf[pos] = 2
+			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+			pos += 3
+		case x <= 0xffffffff:
+			buf[pos] = 4
+			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+			pos += 5
+		default:
+			buf[pos] = 8
+			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+			pos += 9
+		}
+	}
+
+	if value.RemainingTime != nil {
+		buf[pos] = byte(167)
+		pos += 1
+		switch x := *value.RemainingTime; {
+		case x <= 0xff:
+			buf[pos] = 1
+			buf[pos+1] = byte(x)
+			pos += 2
+		case x <= 0xffff:
+			buf[pos] = 2
+			binary.BigEndian.PutUint16(buf[pos+1:], uint16(x))
+			pos += 3
+		case x <= 0xffffffff:
+			buf[pos] = 4
+			binary.BigEndian.PutUint32(buf[pos+1:], uint32(x))
+			pos += 5
+		default:
+			buf[pos] = 8
+			binary.BigEndian.PutUint64(buf[pos+1:], uint64(x))
+			pos += 9
 		}
 	}
 
@@ -2112,54 +2113,8 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 					}
 
 				}
-			case 165:
-				if progress+1 == 2 {
-					handled = true
-					{
-						tempVal := uint64(0)
-						tempVal = uint64(0)
-						{
-							for i := 0; i < int(l); i++ {
-								x := byte(0)
-								x, err = reader.ReadByte()
-								if err != nil {
-									if err == io.EOF {
-										err = io.ErrUnexpectedEOF
-									}
-									break
-								}
-								tempVal = uint64(tempVal<<8) | uint64(x)
-							}
-						}
-						value.RemainingTries = &tempVal
-					}
-
-				}
-			case 167:
-				if progress+1 == 3 {
-					handled = true
-					{
-						tempVal := uint64(0)
-						tempVal = uint64(0)
-						{
-							for i := 0; i < int(l); i++ {
-								x := byte(0)
-								x, err = reader.ReadByte()
-								if err != nil {
-									if err == io.EOF {
-										err = io.ErrUnexpectedEOF
-									}
-									break
-								}
-								tempVal = uint64(tempVal<<8) | uint64(x)
-							}
-						}
-						value.RemainingTime = &tempVal
-					}
-
-				}
 			case 169:
-				if progress+1 == 4 {
+				if progress+1 == 2 {
 					handled = true
 					value.IssuedCertificateName = make(enc.Name, l/2+1)
 					startName := reader.Pos()
@@ -2184,7 +2139,7 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 
 				}
 			case 30:
-				if progress+1 == 5 {
+				if progress+1 == 3 {
 					handled = true
 					value.ForwardingHint = make(enc.Name, l/2+1)
 					startName := reader.Pos()
@@ -2205,6 +2160,52 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 					}
 					if err == nil && reader.Pos() != endName {
 						err = enc.ErrBufferOverflow
+					}
+
+				}
+			case 165:
+				if progress+1 == 4 {
+					handled = true
+					{
+						tempVal := uint64(0)
+						tempVal = uint64(0)
+						{
+							for i := 0; i < int(l); i++ {
+								x := byte(0)
+								x, err = reader.ReadByte()
+								if err != nil {
+									if err == io.EOF {
+										err = io.ErrUnexpectedEOF
+									}
+									break
+								}
+								tempVal = uint64(tempVal<<8) | uint64(x)
+							}
+						}
+						value.RemainingTries = &tempVal
+					}
+
+				}
+			case 167:
+				if progress+1 == 5 {
+					handled = true
+					{
+						tempVal := uint64(0)
+						tempVal = uint64(0)
+						{
+							for i := 0; i < int(l); i++ {
+								x := byte(0)
+								x, err = reader.ReadByte()
+								if err != nil {
+									if err == io.EOF {
+										err = io.ErrUnexpectedEOF
+									}
+									break
+								}
+								tempVal = uint64(tempVal<<8) | uint64(x)
+							}
+						}
+						value.RemainingTime = &tempVal
 					}
 
 				}
@@ -2266,13 +2267,13 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 				case 1 - 1:
 					err = enc.ErrSkipRequired{Name: "ChallengeStatus", TypeNum: 163}
 				case 2 - 1:
-					value.RemainingTries = nil
-				case 3 - 1:
-					value.RemainingTime = nil
-				case 4 - 1:
 					value.IssuedCertificateName = nil
-				case 5 - 1:
+				case 3 - 1:
 					value.ForwardingHint = nil
+				case 4 - 1:
+					value.RemainingTries = nil
+				case 5 - 1:
+					value.RemainingTime = nil
 				case 6 - 1:
 
 				}
@@ -2290,13 +2291,13 @@ func (context *ChallengeDataPlaintextParsingContext) Parse(reader enc.ParseReade
 		case 1 - 1:
 			err = enc.ErrSkipRequired{Name: "ChallengeStatus", TypeNum: 163}
 		case 2 - 1:
-			value.RemainingTries = nil
-		case 3 - 1:
-			value.RemainingTime = nil
-		case 4 - 1:
 			value.IssuedCertificateName = nil
-		case 5 - 1:
+		case 3 - 1:
 			value.ForwardingHint = nil
+		case 4 - 1:
+			value.RemainingTries = nil
+		case 5 - 1:
+			value.RemainingTime = nil
 		case 6 - 1:
 
 		}

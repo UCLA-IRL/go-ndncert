@@ -57,9 +57,9 @@ type ChallengeDataPlaintext struct {
 	Status uint64 `tlv:"0x9B"`
 	//+field:string
 	ChallengeStatus string `tlv:"0xA3"`
-	//+field:name:optional
+	//+field:name
 	IssuedCertificateName enc.Name `tlv:"0xA9"`
-	//+field:name:optional
+	//+field:name
 	ForwardingHint enc.Name `tlv:"0x1e"`
 	//+field:natural:optional
 	RemainingTries *uint64 `tlv:"0xA5"`

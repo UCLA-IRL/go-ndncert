@@ -94,14 +94,14 @@ func ExpressInfoInterest(ndnEngine ndn.Engine, caPrefix string) ([]byte, error) 
 	return callResult.Content.Join(), nil
 }
 
-func (requester *requesterState) ExpressNewInterest() error {
+func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64) error {
 	logger := log.WithField(
 		"module", "requester",
 	)
 	logger.Infof("Generating a NEW interest to %s", requester.caPrefix+server.PrefixNew)
 
 	// Get the public key encoding
-	publicKeyEncoding, publicKeyEncodingError := crypto.EncodePublicKey(&requester.certKey.PublicKey)
+	publicKeyEncoding, publicKeyEncodingError := crypto.GenerateCertificate(requester.certKey, validityPeriodSeconds)
 	if publicKeyEncodingError != nil {
 		logger.Fatal("Failed to encode the public key")
 		return publicKeyEncodingError
