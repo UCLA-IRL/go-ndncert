@@ -4,10 +4,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	crand "crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/apex/log"
+	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
@@ -17,7 +17,6 @@ import (
 	"go-ndncert/crypto"
 	"go-ndncert/ndncert"
 	"go-ndncert/ndncert/server"
-	mrand "math/rand"
 	"time"
 )
 
@@ -88,36 +87,31 @@ func ExpressInfoInterest(ndnEngine ndn.Engine, caPrefix string) ([]byte, error) 
 	// Fetch the data
 	matchedNode := ntSchemaTree.Root().Apply(enc.Matching{})
 	callResult := <-matchedNode.Call("NeedChan").(chan schema.NeedResult)
-	switch callResult.Status {
-	case ndn.InterestResultNack:
-		return nil, errors.New(fmt.Sprintf("info failed: nacked with reason %s", *callResult.NackReason))
-	case ndn.InterestResultTimeout:
-		return nil, errors.New("info failed: interest timed out")
-	case ndn.InterestCancelled:
-		return nil, errors.New("info failed: interest cancelled")
+	interestResultError := validateNdnInterestResult(callResult.Status, *callResult.NackReason)
+	if interestResultError != nil {
+		return nil, interestResultError
 	}
 	return callResult.Content.Join(), nil
 }
 
-func (requesterState *requesterState) ExpressNewInterest() error {
+func (requester *requesterState) ExpressNewInterest() error {
 	logger := log.WithField(
 		"module", "requester",
 	)
-	logger.Infof("Generating a NEW interest to %s", requesterState.caPrefix+server.PrefixNew)
+	logger.Infof("Generating a NEW interest to %s", requester.caPrefix+server.PrefixNew)
 
 	// Get the public key encoding
-	publicKeyEncoding, publicKeyEncodingError := crypto.EncodePublicKey(&requesterState.certKey.PublicKey)
+	publicKeyEncoding, publicKeyEncodingError := crypto.EncodePublicKey(&requester.certKey.PublicKey)
 	if publicKeyEncodingError != nil {
 		logger.Fatal("Failed to encode the public key")
 		return publicKeyEncodingError
 	}
 
 	// Generate the cert-request
-	keyId := make([]byte, 8)
-	issuerId := make([]byte, 8)
-	binary.LittleEndian.PutUint64(keyId, mrand.Uint64())
-	binary.LittleEndian.PutUint64(issuerId, mrand.Uint64())
-	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requesterState.requesterName, keyId, issuerId))
+	keyId := uniuri.NewLen(8)
+	issuerId := uniuri.NewLen(8)
+	logger.Infof("Key ID: %s, Issuer ID: %s", keyId, issuerId)
+	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requester.requesterName, keyId, issuerId))
 	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
 		certName,
 		&ndn.DataConfig{
@@ -126,37 +120,43 @@ func (requesterState *requesterState) ExpressNewInterest() error {
 			FinalBlockID: nil,
 		},
 		enc.Wire{publicKeyEncoding},
-		sec.NewEccSigner(true, false, time.Hour*24, requesterState.certKey, certName),
-		//sec.NewEmptySigner(),
+		//sec.NewEccSigner(true, false, time.Hour*24, requester.certKey, certName),
+		sec.NewEmptySigner(),
 	)
 	if certRequestError != nil {
 		logger.Fatalf("Failed to generate the certificate: %s", certRequestError.Error())
 		return certRequestError
 	}
 
-	newInterestName, _ := enc.NameFromStr(requesterState.caPrefix + server.PrefixNew)
+	newInterestName, _ := enc.NameFromStr(requester.caPrefix + server.PrefixNew)
 	newInterestAppParameters := ndncert.NewInterestAppParameters{
-		EcdhPub:     requesterState.ecdhState.PublicKey.Bytes(),
+		EcdhPub:     requester.ecdhState.PublicKey.Bytes(),
 		CertRequest: certRequest.Join(),
 	}
-	newInterestWire, newInterestFinalName := makeInterestPacket(newInterestName, newInterestAppParameters.Encode(), requesterState.ndnTimer)
+	newInterestWire, newInterestFinalName := makeInterestPacket(newInterestName, newInterestAppParameters.Encode(), requester.ndnTimer)
 	interestConfig := &ndn.InterestConfig{
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
-	logger.Infof("Requester state challenge status: %d", requesterState.challengeStatus)
+	logger.Infof("Requester state challenge status: %d", requester.challengeStatus)
 	ch := make(chan struct{})
-	expressError := requesterState.ndnEngine.Express(newInterestFinalName, interestConfig, newInterestWire,
+	expressError := requester.ndnEngine.Express(newInterestFinalName, interestConfig, newInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
-			switch requesterState.challengeStatus {
+			interestResultError := validateNdnInterestResult(result, nackReason)
+			if interestResultError != nil {
+				logger.Errorf("Failed to express interest: %s", interestResultError.Error())
+				ch <- struct{}{}
+				return
+			}
+			switch requester.challengeStatus {
 			case ChallengeStatusBeforeChallenge:
 				newData, _ := ndncert.ParseNewData(enc.NewWireReader(data.Content()), true)
-				requesterState.requestId = RequestId(newData.RequestId)
-				requesterState.ecdhState.SetRemotePublicKey(newData.EcdhPub)
-				sharedSecret := requesterState.ecdhState.GetSharedSecret()
-				requesterState.symmetricKey = [16]byte(crypto.HKDF(sharedSecret, newData.Salt))
-				requesterState.challengeStatus = ChallengeStatusAfterNewData
-				logger.Infof("Received request id: %s", requesterState.requestId)
+				requester.requestId = RequestId(newData.RequestId)
+				requester.ecdhState.SetRemotePublicKey(newData.EcdhPub)
+				sharedSecret := requester.ecdhState.GetSharedSecret()
+				requester.symmetricKey = [16]byte(crypto.HKDF(sharedSecret, newData.Salt))
+				requester.challengeStatus = ChallengeStatusAfterNewData
+				logger.Infof("Received request id: %s", requester.requestId)
 			}
 			ch <- struct{}{}
 		},
@@ -169,11 +169,11 @@ func (requesterState *requesterState) ExpressNewInterest() error {
 	return nil
 }
 
-func (requesterState *requesterState) ExpressEmailChoiceChallenge(emailAddress string) error {
+func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string) error {
 	logger := log.WithField("module", "requester")
 	logger.Infof("Generating an email code choice challenge with email: %s", emailAddress)
-	logger.Infof("Requester state challenge status: %d", requesterState.challengeStatus)
-	if requesterState.challengeStatus != ChallengeStatusAfterNewData {
+	logger.Infof("Requester state challenge status: %d", requester.challengeStatus)
+	if requester.challengeStatus != ChallengeStatusAfterNewData {
 		logger.Error("Bad attempt to generate email choice challenge: does not follow NEW interest")
 		return errors.New("invalid Email Choice Challenge attempted")
 	}
@@ -181,33 +181,39 @@ func (requesterState *requesterState) ExpressEmailChoiceChallenge(emailAddress s
 		server.SelectedChallengeEmail: []byte(emailAddress),
 	}
 	logger.Infof("Email Parameters map: %s", emailParameters)
-	challengeInterestName, _ := enc.NameFromStr(requesterState.caPrefix + server.PrefixChallenge + "/" + string(requesterState.requestId[:]))
+	challengeInterestName, _ := enc.NameFromStr(requester.caPrefix + server.PrefixChallenge + "/" + string(requester.requestId[:]))
 	challengeInterestPlaintext := ndncert.ChallengeInterestPlaintext{
 		SelectedChallenge: server.SelectedChallengeEmail,
 		Parameters:        emailParameters,
 	}
 	logger.Infof("RECEIVED PLAINTEXT: %S", challengeInterestPlaintext.Encode().Join())
-	encryptedMessage := crypto.EncryptPayload(requesterState.symmetricKey, challengeInterestPlaintext.Encode().Join(), requesterState.requestId)
+	encryptedMessage := crypto.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId)
 	challengeInterestAppParameters := ndncert.EncryptedMessage{
 		InitializationVector: encryptedMessage.InitializationVector[:],
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requesterState.ndnTimer)
+	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requester.ndnTimer)
 	interestConfig := &ndn.InterestConfig{
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
 	ch := make(chan struct{})
-	expressError := requesterState.ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
+	expressError := requester.ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
+			interestResultError := validateNdnInterestResult(result, nackReason)
+			if interestResultError != nil {
+				logger.Errorf("Failed to express interest: %s", interestResultError.Error())
+				ch <- struct{}{}
+				return
+			}
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
 			encryptedMessage := crypto.EncryptedMessage{
 				InitializationVector: [12]byte(encryptedChallengeData.InitializationVector),
 				AuthenticationTag:    [16]byte(encryptedChallengeData.AuthenticationTag),
 				EncryptedPayload:     encryptedChallengeData.EncryptedPayload,
 			}
-			plaintext := crypto.DecryptPayload(requesterState.symmetricKey, encryptedMessage, requesterState.requestId)
+			plaintext := crypto.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId)
 			challengeData, _ := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
 			switch {
 			case challengeData.ChallengeStatus == server.ChallengeStatusCodeInvalidEmail:
@@ -216,7 +222,7 @@ func (requesterState *requesterState) ExpressEmailChoiceChallenge(emailAddress s
 				logger.Infof("Remaining time: %d", challengeData.RemainingTime)
 			case challengeData.ChallengeStatus == server.ChallengeStatusCodeNeedCode:
 				logger.Info("Successfully submitted email choice to server")
-				requesterState.challengeStatus = ChallengeStatusAfterSelectionChallengeData
+				requester.challengeStatus = ChallengeStatusAfterSelectionChallengeData
 			}
 			ch <- struct{}{}
 		},
@@ -229,9 +235,9 @@ func (requesterState *requesterState) ExpressEmailChoiceChallenge(emailAddress s
 	return nil
 }
 
-func (requesterState *requesterState) ExpressEmailCodeChallenge(secretCode string) error {
+func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) error {
 	logger := log.WithField("module", "requester")
-	if requesterState.challengeStatus != ChallengeStatusAfterSelectionChallengeData {
+	if requester.challengeStatus != ChallengeStatusAfterSelectionChallengeData {
 		logger.Error("Bad attempt to generate email code challenge: does not follow email choice challenge")
 		return errors.New("invalid Email Code Challenge attempted")
 	}
@@ -243,32 +249,38 @@ func (requesterState *requesterState) ExpressEmailCodeChallenge(secretCode strin
 	secretCodeParameters := map[string][]byte{
 		server.ParameterKeyCode: []byte(secretCode),
 	}
-	challengeInterestName, _ := enc.NameFromStr(requesterState.caPrefix + server.PrefixChallenge + "/" + string(requesterState.requestId[:]))
+	challengeInterestName, _ := enc.NameFromStr(requester.caPrefix + server.PrefixChallenge + "/" + string(requester.requestId[:]))
 	challengeInterestPlaintext := ndncert.ChallengeInterestPlaintext{
 		SelectedChallenge: server.SelectedChallengeEmail,
 		Parameters:        secretCodeParameters,
 	}
-	encryptedMessage := crypto.EncryptPayload(requesterState.symmetricKey, challengeInterestPlaintext.Encode().Join(), requesterState.requestId)
+	encryptedMessage := crypto.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId)
 	challengeInterestAppParameters := ndncert.EncryptedMessage{
 		InitializationVector: encryptedMessage.InitializationVector[:],
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requesterState.ndnTimer)
+	challengeInterestWire, challengeInterestFinalName := makeInterestPacket(challengeInterestName, challengeInterestAppParameters.Encode(), requester.ndnTimer)
 	interestConfig := &ndn.InterestConfig{
 		CanBePrefix: false,
 		MustBeFresh: true,
 	}
 	ch := make(chan struct{})
-	expressError := requesterState.ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
+	expressError := requester.ndnEngine.Express(challengeInterestFinalName, interestConfig, challengeInterestWire,
 		func(result ndn.InterestResult, data ndn.Data, rawData enc.Wire, sigCovered enc.Wire, nackReason uint64) {
+			interestResultError := validateNdnInterestResult(result, nackReason)
+			if interestResultError != nil {
+				logger.Errorf("Failed to express interest: %s", interestResultError.Error())
+				ch <- struct{}{}
+				return
+			}
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
 			encryptedMessage := crypto.EncryptedMessage{
 				InitializationVector: [12]byte(encryptedChallengeData.InitializationVector),
 				AuthenticationTag:    [16]byte(encryptedChallengeData.AuthenticationTag),
 				EncryptedPayload:     encryptedChallengeData.EncryptedPayload,
 			}
-			plaintext := crypto.DecryptPayload(requesterState.symmetricKey, encryptedMessage, requesterState.requestId)
+			plaintext := crypto.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId)
 			challengeData, _ := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
 			switch {
 			case challengeData.ChallengeStatus == server.ChallengeStatusWrongCode:
@@ -303,4 +315,16 @@ func makeInterestPacket(interestName enc.Name, appParameters enc.Wire, ndnTimer 
 		log.WithField("module", "requester").Fatalf("Failed to make interest packet")
 	}
 	return interestWire, finalName
+}
+
+func validateNdnInterestResult(result ndn.InterestResult, nackReason uint64) error {
+	switch result {
+	case ndn.InterestResultNack:
+		return errors.New(fmt.Sprintf("info failed: nacked with reason %d", nackReason))
+	case ndn.InterestResultTimeout:
+		return errors.New("info failed: interest timed out")
+	case ndn.InterestCancelled:
+		return errors.New("info failed: interest cancelled")
+	}
+	return nil
 }
