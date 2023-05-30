@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
-	"fmt"
 	"github.com/apex/log"
 	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
@@ -191,7 +190,7 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 	caDetailsUnmarshalError := yaml.Unmarshal(caDetailsConfigFileBuffer, caDetails)
 	if caDetailsUnmarshalError != nil {
 		logger.Errorf("Failed to generate new Ca State due to yaml unmarshalling error: %s", caDetailsUnmarshalError)
-		return nil, fmt.Errorf("in file %q: %w", caDetailsConfigFileBuffer, caDetailsUnmarshalError)
+		return nil, caDetailsUnmarshalError
 	}
 	caState := &CaState{
 		CaCert:                       nil,
@@ -369,7 +368,6 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 			}
 			if challengeRequestState.challengeState == nil {
 				challengeRequestState.challengeState = NewChallengeState()
-				fmt.Printf("Challenge state created with remaining time (sec): %d", challengeRequestState.challengeState.Expiry.Second())
 			}
 			emailChallengeState, sendEmailStatus := NewEmailChallenge(caState.SmtpModule, string(emailAddress))
 			remainingTimeUint64 := uint64(challengeRequestState.challengeState.Expiry.Sub(time.Now()).Seconds())

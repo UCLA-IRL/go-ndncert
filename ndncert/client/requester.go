@@ -120,8 +120,8 @@ func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64
 			FinalBlockID: nil,
 		},
 		enc.Wire{publicKeyEncoding},
-		sec.NewEccSigner(true, false, time.Hour*24, requester.certKey, certName),
-		//sec.NewEmptySigner(),
+		//sec.NewEccSigner(true, false, time.Hour*24, requester.certKey, certName),
+		sec.NewEmptySigner(),
 	)
 	if certRequestError != nil {
 		logger.Errorf("Failed to generate the certificate: %s", certRequestError.Error())
