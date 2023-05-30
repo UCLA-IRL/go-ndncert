@@ -2,10 +2,12 @@ module go-ndncert
 
 go 1.20
 
+replace github.com/zjkmxy/go-ndn => /Users/rickyguo/Documents/GitHub/go-ndn
+
 require (
 	github.com/apex/log v1.9.0
 	github.com/dchest/uniuri v1.2.0
-	github.com/zjkmxy/go-ndn v0.0.4-0.20230516200059-cf92a9ffa9d6
+	github.com/zjkmxy/go-ndn v0.0.4
 	go.step.sm/crypto v0.29.3
 	golang.org/x/crypto v0.8.0
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
@@ -163,7 +164,7 @@ type ChallengeRequestState struct {
 	challengeType       ChallengeType
 	emailChallengeState *EmailChallengeState
 	challengeState      *ChallengeState
-	clientPublicKey     []byte
+	clientPublicKey     *ecdsa.PublicKey
 }
 
 type CaState struct {
@@ -183,13 +184,13 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 	logger.Infof("Generating a new Ca State with config file path: %s", caConfigFilePath)
 	caDetailsConfigFileBuffer, readFileError := os.ReadFile(caConfigFilePath)
 	if readFileError != nil {
-		logger.Fatalf("Failed to generate new Ca State due to file read error on file path: %s", caConfigFilePath)
+		logger.Errorf("Failed to generate new Ca State due to file read error on file path: %s", caConfigFilePath)
 		return nil, readFileError
 	}
 	caDetails := &CaConfig{}
 	caDetailsUnmarshalError := yaml.Unmarshal(caDetailsConfigFileBuffer, caDetails)
 	if caDetailsUnmarshalError != nil {
-		logger.Fatal("Failed to generate new Ca State due to yaml unmarshalling error")
+		logger.Errorf("Failed to generate new Ca State due to yaml unmarshalling error: %s", caDetailsUnmarshalError)
 		return nil, fmt.Errorf("in file %q: %w", caDetailsConfigFileBuffer, caDetailsUnmarshalError)
 	}
 	caState := &CaState{
@@ -211,7 +212,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	logger.Infof("Setting up routing with ca prefix name: %s", caPrefixName)
 	registerRouteError := ndnEngine.RegisterRoute(caPrefixName)
 	if registerRouteError != nil {
-		logger.Fatalf("Failed to register route with ndn engine")
+		logger.Errorf("Failed to register route with ndn engine: %s", registerRouteError.Error())
 		return registerRouteError
 	}
 
@@ -228,7 +229,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	ntSchema := schema.CreateFromJson(SchemaJson, map[string]any{})
 	ntSchemaAttachError := ntSchema.Attach(infoPrefix, ndnEngine)
 	if ntSchemaAttachError != nil {
-		logger.Fatal("Failed to initialize INFO route: ntSchema attach error")
+		logger.Errorf("Failed to initialize INFO route at nt schema attach: %s", ntSchemaAttachError.Error())
 		return ntSchemaAttachError
 	}
 
@@ -243,7 +244,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 		caState.OnNew(interest, rawInterest, sigCovered, reply, deadline)
 	})
 	if attachNewPrefixHandlerError != nil {
-		logger.Fatalf("Failed to attach NEW prefix handler")
+		logger.Errorf("Failed to attach NEW prefix handler: %s", attachNewPrefixHandlerError)
 		return attachNewPrefixHandlerError
 	}
 
@@ -254,7 +255,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 		caState.OnChallenge(interest, rawInterest, sigCovered, reply, deadline)
 	})
 	if attachChallengePrefixHandlerError != nil {
-		logger.Fatalf("Failed to attach CHALLENGE prefix handler")
+		logger.Errorf("Failed to attach CHALLENGE prefix handler: %s", attachChallengePrefixHandlerError)
 		return attachChallengePrefixHandlerError
 	}
 
@@ -274,12 +275,11 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		return
 	}
 
-	publicKey, publicKeyParsingError := crypto.ParseCertificate(certRequestData.Content().Join())
+	publicKey, publicKeyParsingError := crypto.ParsePublicKey(certRequestData.Content().Join())
 	if publicKeyParsingError != nil {
 		logger.Error("Could not parse the public key from data payload")
 		return
 	}
-	logger.Infof("Received public key: %s", publicKey)
 
 	//notBefore, notAfter := certRequestData.Signature().Validity()
 
@@ -292,8 +292,6 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	salt := getSalt()
 	requestId := getRequestId(caState)
 
-	logger.Infof("Creating requestId mapping with requestId: %s", requestId)
-
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
 		requestId:           requestId,
 		status:              ChallengeStatusNewInterestReceived,
@@ -301,7 +299,7 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		challengeType:       TbdChallengeType,
 		challengeState:      nil,
 		emailChallengeState: nil,
-		clientPublicKey:     certRequestData.Content().Join(),
+		clientPublicKey:     publicKey,
 	}
 
 	newData := ndncert.NewData{
@@ -347,7 +345,6 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 
 	plaintext := crypto.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
-	logger.Infof("RECEIVED PLAINTEXT: %S", plaintext)
 	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
 
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
@@ -355,7 +352,6 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
 		return
 	}
-	logger.Infof("Received parameters map: %s", challengeInterestPlaintext.Parameters)
 	switch {
 	case challengeInterestPlaintext.SelectedChallenge == SelectedChallengeEmail:
 		switch challengeRequestState.status {
