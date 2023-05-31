@@ -1,4 +1,4 @@
-package crypto
+package key_helpers
 
 import (
 	"crypto/aes"

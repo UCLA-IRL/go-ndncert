@@ -14,7 +14,7 @@ import (
 	"github.com/zjkmxy/go-ndn/pkg/schema"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"github.com/zjkmxy/go-ndn/pkg/utils"
-	"go-ndncert/crypto"
+	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert"
 	"go-ndncert/ndncert/server"
 	"time"
@@ -36,7 +36,7 @@ type requesterState struct {
 	caPrefix        string
 	certKey         *ecdsa.PrivateKey
 	challengeStatus ChallengeStatus
-	ecdhState       *crypto.ECDHState
+	ecdhState       *key_helpers.ECDHState
 	interestSigner  ndn.Signer
 	ndnEngine       ndn.Engine
 	requesterName   string
@@ -51,7 +51,7 @@ func NewRequesterState(requesterName string, caPrefix string, ndnEngine ndn.Engi
 	logger.Infof("Generating a new requester state with Requester Name %s and Ca Prefix %s", requesterName, caPrefix)
 
 	// Generate ECDH Key Pair used for encryption
-	ecdhState := crypto.ECDHState{}
+	ecdhState := key_helpers.ECDHState{}
 	ecdhState.GenerateKeyPair()
 
 	// Generate ECDSA key used for signing
@@ -101,7 +101,7 @@ func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64
 	logger.Infof("Generating a NEW interest to %s", requester.caPrefix+server.PrefixNew)
 
 	// Get the public key encoding
-	publicKeyEncoding, publicKeyEncodingError := crypto.EncodePublicKey(&requester.certKey.PublicKey)
+	publicKeyEncoding, publicKeyEncodingError := key_helpers.EncodePublicKey(&requester.certKey.PublicKey)
 	if publicKeyEncodingError != nil {
 		logger.Error("Failed to encode the public key")
 		return publicKeyEncodingError
@@ -157,7 +157,7 @@ func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64
 				requester.requestId = RequestId(newData.RequestId)
 				requester.ecdhState.SetRemotePublicKey(newData.EcdhPub)
 				sharedSecret := requester.ecdhState.GetSharedSecret()
-				requester.symmetricKey = [16]byte(crypto.HKDF(sharedSecret, newData.Salt))
+				requester.symmetricKey = [16]byte(key_helpers.HKDF(sharedSecret, newData.Salt))
 				requester.challengeStatus = ChallengeStatusAfterNewData
 			}
 			ch <- struct{}{}
@@ -186,7 +186,7 @@ func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string
 		SelectedChallenge: server.SelectedChallengeEmail,
 		Parameters:        emailParameters,
 	}
-	encryptedMessage := crypto.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId)
+	encryptedMessage := key_helpers.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId)
 	challengeInterestAppParameters := ndncert.EncryptedMessage{
 		InitializationVector: encryptedMessage.InitializationVector[:],
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
@@ -211,12 +211,12 @@ func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string
 				return
 			}
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
-			encryptedMessage := crypto.EncryptedMessage{
+			encryptedMessage := key_helpers.EncryptedMessage{
 				InitializationVector: [12]byte(encryptedChallengeData.InitializationVector),
 				AuthenticationTag:    [16]byte(encryptedChallengeData.AuthenticationTag),
 				EncryptedPayload:     encryptedChallengeData.EncryptedPayload,
 			}
-			plaintext := crypto.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId)
+			plaintext := key_helpers.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId)
 			challengeData, _ := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
 			switch {
 			case challengeData.ChallengeStatus == server.ChallengeStatusCodeInvalidEmail:
@@ -257,7 +257,7 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) er
 		SelectedChallenge: server.SelectedChallengeEmail,
 		Parameters:        secretCodeParameters,
 	}
-	encryptedMessage := crypto.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId)
+	encryptedMessage := key_helpers.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId)
 	challengeInterestAppParameters := ndncert.EncryptedMessage{
 		InitializationVector: encryptedMessage.InitializationVector[:],
 		AuthenticationTag:    encryptedMessage.AuthenticationTag[:],
@@ -282,12 +282,12 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) er
 				return
 			}
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
-			encryptedMessage := crypto.EncryptedMessage{
+			encryptedMessage := key_helpers.EncryptedMessage{
 				InitializationVector: [12]byte(encryptedChallengeData.InitializationVector),
 				AuthenticationTag:    [16]byte(encryptedChallengeData.AuthenticationTag),
 				EncryptedPayload:     encryptedChallengeData.EncryptedPayload,
 			}
-			plaintext := crypto.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId)
+			plaintext := key_helpers.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId)
 			challengeData, _ := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
 			switch {
 			case challengeData.ChallengeStatus == server.ChallengeStatusWrongCode:

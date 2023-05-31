@@ -13,8 +13,8 @@ import (
 	_ "github.com/zjkmxy/go-ndn/pkg/schema/rdr"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"github.com/zjkmxy/go-ndn/pkg/utils"
-	"go-ndncert/crypto"
 	"go-ndncert/email"
+	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert"
 	"go.step.sm/crypto/randutil"
 	"golang.org/x/exp/slices"
@@ -274,7 +274,7 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		return
 	}
 
-	publicKey, publicKeyParsingError := crypto.ParsePublicKey(certRequestData.Content().Join())
+	publicKey, publicKeyParsingError := key_helpers.ParsePublicKey(certRequestData.Content().Join())
 	if publicKeyParsingError != nil {
 		logger.Error("Could not parse the public key from data payload")
 		return
@@ -294,7 +294,7 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
 		requestId:           requestId,
 		status:              ChallengeStatusNewInterestReceived,
-		encryptionKey:       ([16]byte)(crypto.HKDF(ecdhState.GetSharedSecret(), salt)),
+		encryptionKey:       ([16]byte)(key_helpers.HKDF(ecdhState.GetSharedSecret(), salt)),
 		challengeType:       TbdChallengeType,
 		challengeState:      nil,
 		emailChallengeState: nil,
@@ -329,9 +329,9 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	requestId := (RequestId)([]byte(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
 	encryptedMessageReader := enc.NewWireReader(interest.AppParam())
 	encryptedMessage, _ := ndncert.ParseEncryptedMessage(encryptedMessageReader, true)
-	initializationVector := ([crypto.NonceSizeBytes]byte)(encryptedMessage.InitializationVector)
-	authenticationTag := ([crypto.TagSizeBytes]byte)(encryptedMessage.AuthenticationTag)
-	encryptedMessageObject := crypto.EncryptedMessage{
+	initializationVector := ([key_helpers.NonceSizeBytes]byte)(encryptedMessage.InitializationVector)
+	authenticationTag := ([key_helpers.TagSizeBytes]byte)(encryptedMessage.AuthenticationTag)
+	encryptedMessageObject := key_helpers.EncryptedMessage{
 		InitializationVector: initializationVector,
 		AuthenticationTag:    authenticationTag,
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
@@ -343,7 +343,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		return
 	}
 
-	plaintext := crypto.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
+	plaintext := key_helpers.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
 	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
 
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
@@ -386,7 +386,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 					RemainingTime:   &remainingTimeUint64,
 				}
-				encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+				encryptedChallenge := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
 				challengeEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedChallenge.InitializationVector[:],
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
@@ -402,7 +402,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 				RemainingTime:   &remainingTimeUint64,
 			}
-			encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+			encryptedChallenge := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
 			challengeEncryptedMessage := ndncert.EncryptedMessage{
 				InitializationVector: encryptedChallenge.InitializationVector[:],
 				AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
@@ -444,7 +444,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 					RemainingTime:   &remainingTimeUint64,
 				}
-				encryptedChallenge := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+				encryptedChallenge := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
 				challengeEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedChallenge.InitializationVector[:],
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
@@ -458,7 +458,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					ChallengeStatus:       ChallengeStatusCodeSuccess,
 					IssuedCertificateName: generateCertificateName(caState),
 				}
-				encryptedSuccess := crypto.EncryptPayload(challengeRequestState.encryptionKey, plaintextSuccess.Encode().Join(), requestId)
+				encryptedSuccess := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextSuccess.Encode().Join(), requestId)
 				successEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedSuccess.InitializationVector[:],
 					AuthenticationTag:    encryptedSuccess.AuthenticationTag[:],
@@ -471,8 +471,8 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 	}
 }
 
-func getEcdhState(newInterestAppParameters *ndncert.NewInterestAppParameters) crypto.ECDHState {
-	ecdhState := crypto.ECDHState{}
+func getEcdhState(newInterestAppParameters *ndncert.NewInterestAppParameters) key_helpers.ECDHState {
+	ecdhState := key_helpers.ECDHState{}
 	ecdhState.GenerateKeyPair()
 	ecdhState.SetRemotePublicKey(newInterestAppParameters.EcdhPub)
 	return ecdhState
