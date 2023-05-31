@@ -10,6 +10,7 @@ import (
 	"go-ndncert/ndncert/client"
 	"golang.org/x/term"
 	"syscall"
+	"time"
 )
 
 func passAll(enc.Name, enc.Wire, ndn.Signature) bool {
@@ -32,7 +33,7 @@ func main() {
 	defer ndnEngine.Shutdown()
 
 	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", ndnEngine, ndnTimer)
-	requesterState.ExpressNewInterest(86400)
+	requesterState.ExpressNewInterest(time.Hour)
 	requesterState.ExpressEmailChoiceChallenge("ricky99.guo@gmail.com")
 
 	fmt.Print("Enter the secret code you received to your email: ")

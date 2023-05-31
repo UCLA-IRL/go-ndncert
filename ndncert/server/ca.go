@@ -152,6 +152,7 @@ type CaConfig struct {
 	Ca struct {
 		Name                         string `yaml:"name"`
 		Info                         string `yaml:"info"`
+		NotAfterNow                  uint64 `yaml:"notAfterNow"`
 		MaxCertificateValidityPeriod uint64 `yaml:"maxCertificateValidityPeriod"`
 	}
 }
@@ -167,18 +168,21 @@ type ChallengeRequestState struct {
 }
 
 type CaState struct {
-	CaCert                enc.Wire
 	CaInfo                string
 	CaPrefix              string
+	IdentityKey           *ecdsa.PrivateKey
 	MaxCertValidityPeriod time.Duration
+	NotBefore             time.Time
+	NotAfter              time.Time
 	SmtpModule            *email.SmtpModule
+	Signer                ndn.Signer
 
 	ChallengeRequestStateMapping map[RequestId]*ChallengeRequestState
 }
 
 const negativeRequestIdOffset = -2
 
-func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState, error) {
+func NewCaState(caConfigFilePath string, identityKey *ecdsa.PrivateKey, smtpModule *email.SmtpModule) (*CaState, error) {
 	logger := log.WithField("module", "ca")
 	logger.Infof("Generating a new Ca State with config file path: %s", caConfigFilePath)
 	caDetailsConfigFileBuffer, readFileError := os.ReadFile(caConfigFilePath)
@@ -192,12 +196,16 @@ func NewCaState(caConfigFilePath string, smtpModule *email.SmtpModule) (*CaState
 		logger.Errorf("Failed to generate new Ca State due to yaml unmarshalling error: %s", caDetailsUnmarshalError)
 		return nil, caDetailsUnmarshalError
 	}
+	keyLocatorName, _ := enc.NameFromStr(caDetails.Ca.Name + PrefixInfo)
 	caState := &CaState{
-		CaCert:                       nil,
 		CaInfo:                       caDetails.Ca.Info,
 		CaPrefix:                     caDetails.Ca.Name,
-		MaxCertValidityPeriod:        time.Duration(caDetails.Ca.MaxCertificateValidityPeriod),
+		IdentityKey:                  identityKey,
+		MaxCertValidityPeriod:        time.Second * time.Duration(caDetails.Ca.MaxCertificateValidityPeriod),
+		NotBefore:                    time.Now(),
+		NotAfter:                     time.Now().Add(time.Second * time.Duration(caDetails.Ca.NotAfterNow)),
 		SmtpModule:                   smtpModule,
+		Signer:                       sec.NewEccSigner(false, false, time.Duration(0), identityKey, keyLocatorName),
 		ChallengeRequestStateMapping: make(map[RequestId]*ChallengeRequestState),
 	}
 	return caState, nil
@@ -216,12 +224,17 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	}
 
 	// Set up INFO route
+	certificateBytes, generateCertificateError := key_helpers.GenerateCertificate(caState.IdentityKey, uint64(caState.MaxCertValidityPeriod.Seconds()))
+	if generateCertificateError != nil {
+		logger.Errorf("Failed to generate certificate: %s", generateCertificateError.Error())
+		return generateCertificateError
+	}
 	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
 		CaInfo:         caState.CaInfo,
 		ParameterKey:   []string{},
 		MaxValidPeriod: uint64(caState.MaxCertValidityPeriod.Seconds()),
-		CaCertificate:  caState.CaCert,
+		CaCertificate:  enc.Wire{certificateBytes},
 	}
 	infoPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixInfo)
 	logger.Infof("Initializing INFO route on %s", infoPrefix.String())
@@ -269,27 +282,52 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	logger.Debugf("succeeded parsing")
 	certRequestData, _, _ := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
-		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 		logger.Error("Bad NEW interest received: content type is not KEY type")
 		return
 	}
 
 	publicKey, publicKeyParsingError := key_helpers.ParsePublicKey(certRequestData.Content().Join())
 	if publicKeyParsingError != nil {
+		replyWithError(ErrorCodeBadInterestFormat, interest.Name(), reply, caState.Signer)
 		logger.Error("Could not parse the public key from data payload")
 		return
 	}
 
-	//notBefore, notAfter := certRequestData.Signature().Validity()
+	// TODO: Verify certificate signature
+	//if !sec.EcdsaValidate(certRequestData.Content(), certRequestData.Signature(), publicKey) {
+	//	logger.Error("Bad NEW interest received: bad interest signature detected")
+	//	replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
+	//	return
+	//}
+	logger.Infof("Validating with public key: %+v", publicKey)
+	if !sec.EcdsaValidate(sigCovered, interest.Signature(), publicKey) {
+		logger.Error("Bad CHALLENGE interest received: bad signature detected")
+		replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
+		return
+	}
 
-	// TODO: add state for this - Specifically, the NotBefore field and NotAfter field in the certificate request should satisfy
-	//request.NotBefore < request.NotAfter
-	//request.NotBefore >= max(now - 120s, ca-certificate.NotBefore)
-	//request.NotAfter <= min(now + max-validity-period, ca-certificate.NotAfter)
+	notBefore, notAfter := certRequestData.Signature().Validity()
+	if notBefore.After(*notAfter) {
+		logger.Error("Bad NEW interest certificate received: notBefore comes after notAfter")
+		replyWithError(ErrorCodeBadValidityPeriod, interest.Name(), reply, caState.Signer)
+		return
+	}
+	if notBefore.Before(time.Now().Add(-120*time.Second)) || notBefore.Before(caState.NotBefore) {
+		logger.Error("Bad NEW interest certificate received: notBefore is greater than server limit")
+		replyWithError(ErrorCodeBadValidityPeriod, interest.Name(), reply, caState.Signer)
+		return
+	}
+	if notAfter.After(time.Now().Add(caState.MaxCertValidityPeriod)) || notAfter.After(caState.NotAfter) {
+		logger.Errorf("notAfter: %+v, left: %+v, right %+v", notAfter, time.Now().Add(caState.MaxCertValidityPeriod), caState.NotAfter)
+		logger.Error("Bad NEW interest certificate received: notAfter is lesser than server minimum")
+		replyWithError(ErrorCodeBadValidityPeriod, interest.Name(), reply, caState.Signer)
+		return
+	}
 
 	ecdhState := getEcdhState(newInterest)
 	salt := getSalt()
-	requestId := getRequestId(caState)
+	requestId := generateRequestId(caState)
 
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
 		requestId:           requestId,
@@ -309,7 +347,7 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	}
 
 	newDataWire := newData.Encode()
-	replyWithData(interest.Name(), newDataWire, reply)
+	replyWithData(interest.Name(), newDataWire, reply, caState.Signer)
 }
 
 func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
@@ -322,11 +360,24 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		logger.Errorf(
 			"Bad CHALLENGE interest received due request id of %s with length, should be %d but is %d",
 			curRequestId, RequestIdLength, curRequestIdLength)
-		replyWithError(ErrorCodeBadInterestFormat, interest.Name(), reply)
+		replyWithError(ErrorCodeBadInterestFormat, interest.Name(), reply, caState.Signer)
 		return
 	}
 
 	requestId := (RequestId)([]byte(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
+	challengeRequestState, ok := caState.ChallengeRequestStateMapping[requestId]
+	if !ok {
+		logger.Error("Bad CHALLENGE interest received: invalid request id detected")
+		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
+		return
+	}
+	logger.Infof("Validating with public key: %+v", challengeRequestState.clientPublicKey)
+	if !sec.EcdsaValidate(sigCovered, interest.Signature(), challengeRequestState.clientPublicKey) {
+		logger.Error("Bad CHALLENGE interest received: bad signature detected")
+		replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
+		return
+	}
+
 	encryptedMessageReader := enc.NewWireReader(interest.AppParam())
 	encryptedMessage, _ := ndncert.ParseEncryptedMessage(encryptedMessageReader, true)
 	initializationVector := ([key_helpers.NonceSizeBytes]byte)(encryptedMessage.InitializationVector)
@@ -336,19 +387,13 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		AuthenticationTag:    authenticationTag,
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-	challengeRequestState, ok := caState.ChallengeRequestStateMapping[requestId]
-	if !ok {
-		logger.Error("Bad CHALLENGE interest received: invalid request id detected")
-		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
-		return
-	}
 
 	plaintext := key_helpers.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
 	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
 
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
 		logger.Error("Bad CHALLENGE interest received: invalid selected challenge detected")
-		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 		return
 	}
 	switch {
@@ -357,13 +402,13 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		case ChallengeStatusNewInterestReceived:
 			if len(challengeInterestPlaintext.Parameters) != 1 {
 				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
-				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 				return
 			}
 			emailAddress, emailParameterPresent := challengeInterestPlaintext.Parameters[ParameterKeyEmail]
 			if !emailParameterPresent {
 				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
-				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 				return
 			}
 			if challengeRequestState.challengeState == nil {
@@ -375,7 +420,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				logger.Error("Bad CHALLENGE interest received: invalid email parameter detected")
 				challengeRequestState.challengeState.RemainingAttempts -= 1
 				if challengeRequestState.challengeState.RemainingAttempts == 0 {
-					replyWithError(ErrorCodeRunOutOfTries, interest.Name(), reply)
+					replyWithError(ErrorCodeRunOutOfTries, interest.Name(), reply, caState.Signer)
 					logger.Error("Due to bad email, the requester has run out of tries")
 					delete(caState.ChallengeRequestStateMapping, requestId)
 					return
@@ -392,7 +437,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
 					EncryptedPayload:     encryptedChallenge.EncryptedPayload,
 				}
-				replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply)
+				replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply, caState.Signer)
 				return
 			}
 			challengeRequestState.status = ChallengeStatusChallengeIssued
@@ -409,22 +454,22 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				EncryptedPayload:     encryptedChallenge.EncryptedPayload,
 			}
 			challengeRequestState.emailChallengeState = emailChallengeState
-			replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply)
+			replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply, caState.Signer)
 		case ChallengeStatusChallengeIssued:
 			if len(challengeInterestPlaintext.Parameters) != 1 {
 				logger.Error("Bad CHALLENGE interest received: invalid code parameter detected")
-				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 				return
 			}
 			secretCode, secretCodePresent := challengeInterestPlaintext.Parameters[ParameterKeyCode]
 			if !secretCodePresent {
 				logger.Error("Bad CHALLENGE interest received: invalid code parameter detected")
-				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply)
+				replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 				return
 			}
 			if challengeRequestState.challengeState.Expiry.Before(time.Now()) {
 				logger.Error("Requester has run out of time")
-				replyWithError(ErrorCodeRunOutOfTime, interest.Name(), reply)
+				replyWithError(ErrorCodeRunOutOfTime, interest.Name(), reply, caState.Signer)
 				delete(caState.ChallengeRequestStateMapping, requestId)
 				return
 			}
@@ -434,7 +479,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				remainingTimeUint64 := uint64(challengeRequestState.challengeState.Expiry.Second())
 				if challengeRequestState.challengeState.RemainingAttempts == 0 {
 					logger.Error("Due to bad code, the requester has run out of tries")
-					replyWithError(ErrorCodeRunOutOfTries, interest.Name(), reply)
+					replyWithError(ErrorCodeRunOutOfTries, interest.Name(), reply, caState.Signer)
 					delete(caState.ChallengeRequestStateMapping, requestId)
 					return
 				}
@@ -450,7 +495,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
 					EncryptedPayload:     encryptedChallenge.EncryptedPayload,
 				}
-				replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply)
+				replyWithData(interest.Name(), challengeEncryptedMessage.Encode(), reply, caState.Signer)
 				return
 			} else {
 				plaintextSuccess := ndncert.ChallengeDataPlaintext{
@@ -464,7 +509,7 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 					AuthenticationTag:    encryptedSuccess.AuthenticationTag[:],
 					EncryptedPayload:     encryptedSuccess.EncryptedPayload,
 				}
-				replyWithData(interest.Name(), successEncryptedMessage.Encode(), reply)
+				replyWithData(interest.Name(), successEncryptedMessage.Encode(), reply, caState.Signer)
 				delete(caState.ChallengeRequestStateMapping, requestId)
 			}
 		}
@@ -480,15 +525,18 @@ func getEcdhState(newInterestAppParameters *ndncert.NewInterestAppParameters) ke
 
 func getSalt() []byte {
 	salt := make([]byte, sha256.New().Size())
-	rand.Read(salt)
+	_, randReadError := rand.Read(salt)
+	if randReadError != nil {
+		panic(randReadError.Error())
+	}
 	return salt
 }
 
-func getRequestId(caState *CaState) RequestId {
+func generateRequestId(caState *CaState) RequestId {
 	randomRequestId, _ := randutil.Alphanumeric(RequestIdLength)
 	requestId := (RequestId)([]byte(randomRequestId))
 	if _, ok := caState.ChallengeRequestStateMapping[requestId]; ok {
-		return getRequestId(caState)
+		return generateRequestId(caState)
 	}
 	return requestId
 }
@@ -499,7 +547,7 @@ func generateCertificateName(caState *CaState) enc.Name {
 	return certificateName
 }
 
-func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyFunc) {
+func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyFunc, ndnSigner ndn.Signer) {
 	logger := log.WithField("module", "ca")
 	logger.Infof("Replying with error")
 	errorMessageContent := ndncert.ErrorMessage{
@@ -512,7 +560,7 @@ func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyF
 			ContentType: utils.IdPtr(ndn.ContentTypeBlob),
 		},
 		errorMessageContent.Encode(),
-		sec.NewSha256Signer())
+		ndnSigner)
 	if makeDataError != nil {
 		logger.Fatalf("Failed to generate error data packet")
 		return
@@ -524,7 +572,7 @@ func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyF
 	}
 }
 
-func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc) {
+func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc, ndnSigner ndn.Signer) {
 	logger := log.WithField("module", "ca")
 	logger.Infof("Replying with data")
 	data, _, makeDataError := spec_2022.Spec{}.MakeData(
@@ -534,7 +582,7 @@ func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc
 			Freshness:   utils.IdPtr(4 * time.Second),
 		},
 		dataWire,
-		sec.NewSha256Signer())
+		ndnSigner)
 	if makeDataError != nil {
 		logger.Fatalf("Failed to generate data packet")
 		return

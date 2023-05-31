@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"fmt"
 	"github.com/apex/log"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
@@ -39,14 +42,24 @@ func main() {
 		logger.Fatalf("Error encountered setting up SMTP module: %+v", smtpModuleSetupError)
 	}
 
+	// Generate ECDSA key used for ca's identity
+	certKey, certKeyError := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if certKeyError != nil {
+		logger.Error("Failed to generate certificate private key using ecdsa")
+		return
+	}
+
 	// Set up CaState
-	caState, caStateSetupError := server.NewCaState("../../config/ca.yml", smtpModule)
+	caState, caStateSetupError := server.NewCaState("../../config/ca.yml", certKey, smtpModule)
 	if caStateSetupError != nil {
 		logger.Fatalf("Error encountered setting up CA State: %+v", caStateSetupError)
 	}
 
 	// Serve indefinitely
-	caState.Serve(ndnEngine)
+	serveError := caState.Serve(ndnEngine)
+	if serveError != nil {
+		logger.Fatalf("Error encountered while attempting to serve: %+v", serveError)
+	}
 
 	// Wait for keyboard quit signal
 	sigChannel := make(chan os.Signal, 1)

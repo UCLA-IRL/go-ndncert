@@ -33,20 +33,19 @@ const (
 )
 
 type requesterState struct {
-	caPrefix        string
-	certKey         *ecdsa.PrivateKey
-	challengeStatus ChallengeStatus
-	ecdhState       *key_helpers.ECDHState
-	interestSigner  ndn.Signer
-	ndnEngine       ndn.Engine
-	requesterName   string
+	caPrefix         string
+	certKey          *ecdsa.PrivateKey
+	certRequestBytes []byte
+	challengeStatus  ChallengeStatus
+	ecdhState        *key_helpers.ECDHState
+	interestSigner   ndn.Signer
+	ndnEngine        ndn.Engine
 
 	requestId    RequestId
 	symmetricKey [16]byte
 }
 
 func NewRequesterState(requesterName string, caPrefix string, ndnEngine ndn.Engine, ndnTimer ndn.Timer) (*requesterState, error) {
-	// TODO: Add implementation for notBefore and notAfter step
 	logger := log.WithField("module", "requester")
 	logger.Infof("Generating a new requester state with Requester Name %s and Ca Prefix %s", requesterName, caPrefix)
 
@@ -61,14 +60,42 @@ func NewRequesterState(requesterName string, caPrefix string, ndnEngine ndn.Engi
 		return nil, certKeyError
 	}
 
+	// Get the public key encoding
+	publicKeyEncoding, publicKeyEncodingError := key_helpers.EncodePublicKey(&certKey.PublicKey)
+	if publicKeyEncodingError != nil {
+		logger.Error("Failed to encode the public key")
+		return nil, publicKeyEncodingError
+	}
+
+	// Generate the cert-request
+	logger.Infof("Generating public key %+v", certKey.PublicKey)
+	keyId := uniuri.NewLen(8)
+	issuerId := uniuri.NewLen(8)
+	logger.Infof("Key ID: %s, Issuer ID: %s", keyId, issuerId)
+	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requesterName, keyId, issuerId))
+	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
+		certName,
+		&ndn.DataConfig{
+			ContentType:  utils.IdPtr(ndn.ContentTypeKey),
+			Freshness:    utils.IdPtr(time.Hour),
+			FinalBlockID: nil,
+		},
+		enc.Wire{publicKeyEncoding},
+		sec.NewEccSigner(true, false, time.Hour*12, certKey, certName),
+	)
+	if certRequestError != nil {
+		logger.Errorf("Failed to generate the certificate: %s", certRequestError.Error())
+		return nil, certRequestError
+	}
+
 	return &requesterState{
-		requesterName:   requesterName,
-		caPrefix:        caPrefix,
-		ecdhState:       &ecdhState,
-		certKey:         certKey,
-		challengeStatus: ChallengeStatusBeforeChallenge,
-		interestSigner:  sec.NewSha256IntSigner(ndnTimer),
-		ndnEngine:       ndnEngine,
+		caPrefix:         caPrefix,
+		certRequestBytes: certRequest.Join(),
+		ecdhState:        &ecdhState,
+		certKey:          certKey,
+		challengeStatus:  ChallengeStatusBeforeChallenge,
+		interestSigner:   sec.NewEccSigner(false, true, time.Duration(0), certKey, certName),
+		ndnEngine:        ndnEngine,
 	}, nil
 }
 
@@ -94,44 +121,16 @@ func ExpressInfoInterest(ndnEngine ndn.Engine, caPrefix string) ([]byte, error) 
 	return callResult.Content.Join(), nil
 }
 
-func (requester *requesterState) ExpressNewInterest(validityPeriodSeconds uint64) error {
+func (requester *requesterState) ExpressNewInterest(certificateValidityPeriod time.Duration) error {
 	logger := log.WithField(
 		"module", "requester",
 	)
 	logger.Infof("Generating a NEW interest to %s", requester.caPrefix+server.PrefixNew)
 
-	// Get the public key encoding
-	publicKeyEncoding, publicKeyEncodingError := key_helpers.EncodePublicKey(&requester.certKey.PublicKey)
-	if publicKeyEncodingError != nil {
-		logger.Error("Failed to encode the public key")
-		return publicKeyEncodingError
-	}
-
-	// Generate the cert-request
-	keyId := uniuri.NewLen(8)
-	issuerId := uniuri.NewLen(8)
-	logger.Infof("Key ID: %s, Issuer ID: %s", keyId, issuerId)
-	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requester.requesterName, keyId, issuerId))
-	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
-		certName,
-		&ndn.DataConfig{
-			ContentType:  utils.IdPtr(ndn.ContentTypeKey),
-			Freshness:    utils.IdPtr(time.Hour),
-			FinalBlockID: nil,
-		},
-		enc.Wire{publicKeyEncoding},
-		//sec.NewEccSigner(true, false, time.Hour*24, requester.certKey, certName),
-		sec.NewEmptySigner(),
-	)
-	if certRequestError != nil {
-		logger.Errorf("Failed to generate the certificate: %s", certRequestError.Error())
-		return certRequestError
-	}
-
 	newInterestName, _ := enc.NameFromStr(requester.caPrefix + server.PrefixNew)
 	newInterestAppParameters := ndncert.NewInterestAppParameters{
 		EcdhPub:     requester.ecdhState.PublicKey.Bytes(),
-		CertRequest: certRequest.Join(),
+		CertRequest: requester.certRequestBytes,
 	}
 	newInterestWire, newInterestFinalName, makeInterestError := makeInterestPacket(newInterestName, newInterestAppParameters.Encode(), requester.interestSigner)
 	if makeInterestError != nil {
