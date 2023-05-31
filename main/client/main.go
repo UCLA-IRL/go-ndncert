@@ -7,6 +7,7 @@ import (
 	basic_engine "github.com/zjkmxy/go-ndn/pkg/engine/basic"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
+	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert/client"
 	"golang.org/x/term"
 	"syscall"
@@ -28,11 +29,20 @@ func main() {
 	engineStartError := ndnEngine.Start()
 	if engineStartError != nil {
 		logger.Fatalf("Unable to start engine: %+v", engineStartError)
-		return
 	}
 	defer ndnEngine.Shutdown()
 
-	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", ndnEngine, ndnTimer)
+	// Get the CA's identity key from INFO request
+	caInfoResult, infoInterestError := client.ExpressInfoInterest(ndnEngine, "/ndn/edu/ucla")
+	if infoInterestError != nil {
+		logger.Fatalf("Encountered error fetching CA INFO: %+v", infoInterestError)
+	}
+	caPublicIdentityKey, parseCertificatePublicKeyError := key_helpers.ParseCertificatePublicKey(caInfoResult.CaCertificate)
+	if parseCertificatePublicKeyError != nil {
+		logger.Fatalf("Failed to parse certificate public key from CA INFO: %+v", parseCertificatePublicKeyError)
+	}
+
+	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", caPublicIdentityKey, ndnEngine)
 	requesterState.ExpressNewInterest(time.Hour)
 	requesterState.ExpressEmailChoiceChallenge("ricky99.guo@gmail.com")
 
