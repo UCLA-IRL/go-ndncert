@@ -25,9 +25,10 @@ func GenerateCertificate(key *ecdsa.PrivateKey, validitySeconds uint64) ([]byte,
 		SerialNumber:          big.NewInt(1),
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(time.Second * time.Duration(validitySeconds)),
-		IsCA:                  false,
+		IsCA:                  true,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		SignatureAlgorithm:    x509.ECDSAWithSHA256,
 		BasicConstraintsValid: true,
 	}
 	certificateBytes, createCertificateError := x509.CreateCertificate(rand.Reader, requesterTemplate, requesterTemplate, &key.PublicKey, key)

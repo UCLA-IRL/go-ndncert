@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"github.com/apex/log"
 	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
@@ -18,8 +19,6 @@ import (
 	"go-ndncert/ndncert"
 	"go.step.sm/crypto/randutil"
 	"golang.org/x/exp/slices"
-	"gopkg.in/yaml.v3"
-	"os"
 	"strings"
 	"time"
 )
@@ -168,42 +167,36 @@ type ChallengeRequestState struct {
 }
 
 type CaState struct {
-	CaInfo                string
-	CaPrefix              string
-	IdentityKey           *ecdsa.PrivateKey
-	MaxCertValidityPeriod time.Duration
-	NotBefore             time.Time
-	NotAfter              time.Time
-	SmtpModule            *email.SmtpModule
-	Signer                ndn.Signer
+	//CaInfo                string
+	//CaPrefix              string
+	//IdentityKey           *ecdsa.PrivateKey
+	//MaxCertValidityPeriod time.Duration
+	//NotBefore             time.Time
+	//NotAfter              time.Time
+	CaPrefix       string
+	CaInfo         string
+	MaxValidPeriod time.Duration
+	CaCert         *x509.Certificate
+	CaCertBytes    []byte // In the case of a non-root CA, the signed certificate served must be passed in.
+	IdentityKey    *ecdsa.PrivateKey
+	SmtpModule     *email.SmtpModule
+	Signer         ndn.Signer
 
 	ChallengeRequestStateMapping map[RequestId]*ChallengeRequestState
 }
 
 const negativeRequestIdOffset = -2
 
-func NewCaState(caConfigFilePath string, identityKey *ecdsa.PrivateKey, smtpModule *email.SmtpModule) (*CaState, error) {
-	logger := log.WithField("module", "ca")
-	logger.Infof("Generating a new Ca State with config file path: %s", caConfigFilePath)
-	caDetailsConfigFileBuffer, readFileError := os.ReadFile(caConfigFilePath)
-	if readFileError != nil {
-		logger.Errorf("Failed to generate new Ca State due to file read error on file path: %s", caConfigFilePath)
-		return nil, readFileError
-	}
-	caDetails := &CaConfig{}
-	caDetailsUnmarshalError := yaml.Unmarshal(caDetailsConfigFileBuffer, caDetails)
-	if caDetailsUnmarshalError != nil {
-		logger.Errorf("Failed to generate new Ca State due to yaml unmarshalling error: %s", caDetailsUnmarshalError)
-		return nil, caDetailsUnmarshalError
-	}
-	keyLocatorName, _ := enc.NameFromStr(caDetails.Ca.Name + PrefixInfo)
+func NewCaState(caPrefix string, caInfo string, maxValidPeriod uint64, caCert *x509.Certificate, caCertBytes []byte, identityKey *ecdsa.PrivateKey, smtpModule *email.SmtpModule) (*CaState, error) {
+	// TODO: Figure out key locator name for CA's identity key
+	keyLocatorName, _ := enc.NameFromStr("/ndn/edu/ucla/KEY")
 	caState := &CaState{
-		CaInfo:                       caDetails.Ca.Info,
-		CaPrefix:                     caDetails.Ca.Name,
+		CaCert:                       caCert,
+		CaCertBytes:                  caCertBytes,
+		CaPrefix:                     caPrefix,
+		CaInfo:                       caInfo,
 		IdentityKey:                  identityKey,
-		MaxCertValidityPeriod:        time.Second * time.Duration(caDetails.Ca.MaxCertificateValidityPeriod),
-		NotBefore:                    time.Now(),
-		NotAfter:                     time.Now().Add(time.Second * time.Duration(caDetails.Ca.NotAfterNow)),
+		MaxValidPeriod:               time.Second * time.Duration(maxValidPeriod),
 		SmtpModule:                   smtpModule,
 		Signer:                       sec.NewEccSigner(false, false, time.Duration(0), identityKey, keyLocatorName),
 		ChallengeRequestStateMapping: make(map[RequestId]*ChallengeRequestState),
@@ -213,6 +206,7 @@ func NewCaState(caConfigFilePath string, identityKey *ecdsa.PrivateKey, smtpModu
 
 func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	logger := log.WithField("module", "ca")
+	logger.Infof("Preparing to serve with CaState: %+v", caState)
 
 	// Register the route
 	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
@@ -224,17 +218,22 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	}
 
 	// Set up INFO route
-	certificateBytes, generateCertificateError := key_helpers.GenerateCertificate(caState.IdentityKey, uint64(caState.MaxCertValidityPeriod.Seconds()))
-	if generateCertificateError != nil {
-		logger.Errorf("Failed to generate certificate: %s", generateCertificateError.Error())
-		return generateCertificateError
+	if caState.CaCertBytes == nil {
+		// Create a self-signed certificate in the case we don't have a signed one (caCertBytes) passed in
+		// We assume that this CA functions as a root CA
+		certificateBytes, createCertificateError := x509.CreateCertificate(rand.Reader, caState.CaCert, caState.CaCert, &caState.IdentityKey.PublicKey, caState.IdentityKey)
+		if createCertificateError != nil {
+			logger.Errorf("Failed to generate certificate: %s", createCertificateError.Error())
+			return createCertificateError
+		}
+		caState.CaCertBytes = certificateBytes
 	}
 	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
 		CaInfo:         caState.CaInfo,
 		ParameterKey:   []string{},
-		MaxValidPeriod: uint64(caState.MaxCertValidityPeriod.Seconds()),
-		CaCertificate:  enc.Wire{certificateBytes},
+		MaxValidPeriod: uint64(caState.CaCert.NotAfter.Second()),
+		CaCertificate:  enc.Wire{caState.CaCertBytes},
 	}
 	infoPrefix, _ := enc.NameFromStr(caState.CaPrefix + PrefixInfo)
 	logger.Infof("Initializing INFO route on %s", infoPrefix.String())
@@ -313,13 +312,13 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		replyWithError(ErrorCodeBadValidityPeriod, interest.Name(), reply, caState.Signer)
 		return
 	}
-	if notBefore.Before(time.Now().Add(-120*time.Second)) || notBefore.Before(caState.NotBefore) {
+	if notBefore.Before(time.Now().Add(-120*time.Second)) || notBefore.Before(caState.CaCert.NotBefore) {
 		logger.Error("Bad NEW interest certificate received: notBefore is greater than server limit")
 		replyWithError(ErrorCodeBadValidityPeriod, interest.Name(), reply, caState.Signer)
 		return
 	}
-	if notAfter.After(time.Now().Add(caState.MaxCertValidityPeriod)) || notAfter.After(caState.NotAfter) {
-		logger.Errorf("notAfter: %+v, left: %+v, right %+v", notAfter, time.Now().Add(caState.MaxCertValidityPeriod), caState.NotAfter)
+	if notAfter.After(time.Now().Add(caState.MaxValidPeriod)) || notAfter.After(caState.CaCert.NotAfter) {
+		logger.Errorf("notAfter: %+v, left: %+v, right %+v", notAfter, time.Now().Add(caState.MaxValidPeriod), caState.CaCert.NotAfter)
 		logger.Error("Bad NEW interest certificate received: notAfter is lesser than server minimum")
 		replyWithError(ErrorCodeBadValidityPeriod, interest.Name(), reply, caState.Signer)
 		return

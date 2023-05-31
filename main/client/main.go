@@ -11,7 +11,6 @@ import (
 	"go-ndncert/ndncert/client"
 	"golang.org/x/term"
 	"syscall"
-	"time"
 )
 
 func passAll(enc.Name, enc.Wire, ndn.Signature) bool {
@@ -42,11 +41,37 @@ func main() {
 		logger.Fatalf("Failed to parse certificate public key from CA INFO: %+v", parseCertificatePublicKeyError)
 	}
 
-	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", caPublicIdentityKey, ndnEngine)
-	requesterState.ExpressNewInterest(time.Hour)
-	requesterState.ExpressEmailChoiceChallenge("ricky99.guo@gmail.com")
-
-	fmt.Print("Enter the secret code you received to your email: ")
-	bytePassword, _ := term.ReadPassword(syscall.Stdin)
-	requesterState.ExpressEmailCodeChallenge(string(bytePassword))
+	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", caPublicIdentityKey, 86300, ndnEngine)
+	newResult, newError := requesterState.ExpressNewInterest()
+	if newError != nil {
+		logger.Fatalf("Encountered error in NEW: %+v", newError)
+	}
+	logger.Infof("NEW step succeeded with result %+v", newResult)
+	for {
+		var email string
+		fmt.Print("Enter the email you wish to send the secret code to: ")
+		fmt.Scanln(&email)
+		challengeResult, challengeError := requesterState.ExpressEmailChoiceChallenge(email)
+		if challengeError != nil {
+			logger.Fatalf("Encountered error email choice CHALLENGE step: %+v", challengeError)
+		}
+		if challengeResult.ChallengeStatus == client.ChallengeStatusAfterSelectionChallengeData {
+			logger.Infof("Email choice CHALLENGE step succeeded with result %+v", challengeResult)
+			break
+		}
+		logger.Infof("Email choice CHALLENGE step failed with result %+v", challengeResult)
+	}
+	for {
+		fmt.Print("Enter the secret code you received to your email: ")
+		bytePassword, _ := term.ReadPassword(syscall.Stdin)
+		challengeResult, challengeError := requesterState.ExpressEmailCodeChallenge(string(bytePassword))
+		if challengeError != nil {
+			logger.Fatalf("Encountered error email code CHALLENGE step: %+v", challengeError)
+		}
+		if challengeResult.ChallengeStatus == client.ChallengeStatusSuccess {
+			logger.Infof("Email code CHALLENGE step succeeded with result %+v", challengeResult)
+			break
+		}
+		logger.Infof("Email code CHALLENGE step failed with result %+v", challengeResult)
+	}
 }
