@@ -89,10 +89,8 @@ func NewRequesterState(requesterName string, caPrefix string, caPublicIdentityKe
 	}
 
 	// Generate the cert-request
-	logger.Infof("Generating public key %+v", certKey.PublicKey)
 	keyId := uniuri.NewLen(8)
 	issuerId := uniuri.NewLen(8)
-	logger.Infof("Key ID: %s, Issuer ID: %s", keyId, issuerId)
 	certName, _ := enc.NameFromStr(fmt.Sprintf("%s/KEY/%s/%s/1", requesterName, keyId, issuerId))
 	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
 		certName,
