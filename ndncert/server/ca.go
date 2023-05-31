@@ -279,7 +279,12 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	logger.Debugf("Raw interest app params: %s", interest.AppParam())
 	newInterest, _ := ndncert.ParseNewInterestAppParameters(enc.NewWireReader(interest.AppParam()), true)
 	logger.Debugf("succeeded parsing")
-	certRequestData, _, _ := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
+	certRequestData, certRequestSigCovered, readCertDataError := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
+	if readCertDataError != nil {
+		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
+		logger.Errorf("Bad NEW interest received with malformed data packet: %s", readCertDataError.Error())
+		return
+	}
 	if *certRequestData.ContentType() != ndn.ContentTypeKey {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 		logger.Error("Bad NEW interest received: content type is not KEY type")
@@ -293,12 +298,11 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		return
 	}
 
-	// TODO: Verify certificate signature
-	//if !sec.EcdsaValidate(certRequestData.Content(), certRequestData.Signature(), publicKey) {
-	//	logger.Error("Bad NEW interest received: bad interest signature detected")
-	//	replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
-	//	return
-	//}
+	if !sec.EcdsaValidate(certRequestSigCovered, certRequestData.Signature(), publicKey) {
+		logger.Error("Bad NEW interest received: bad certificate signature detected")
+		replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
+		return
+	}
 	logger.Infof("Validating with public key: %+v", publicKey)
 	if !sec.EcdsaValidate(sigCovered, interest.Signature(), publicKey) {
 		logger.Error("Bad CHALLENGE interest received: bad signature detected")
