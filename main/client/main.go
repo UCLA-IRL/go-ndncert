@@ -6,6 +6,7 @@ import (
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	basic_engine "github.com/zjkmxy/go-ndn/pkg/engine/basic"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
+	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert/client"
@@ -21,6 +22,8 @@ func main() {
 	log.SetLevel(log.DebugLevel)
 	logger := log.WithField("module", "main")
 
+	caPrefix := "/ndn"
+
 	// Start engine
 	ndnTimer := basic_engine.NewTimer()
 	ndnFace := basic_engine.NewStreamFace("unix", "/var/run/nfd.sock", true)
@@ -32,16 +35,20 @@ func main() {
 	defer ndnEngine.Shutdown()
 
 	// Get the CA's identity key from INFO request
-	caInfoResult, infoInterestError := client.ExpressInfoInterest(ndnEngine, "/ndn/edu/ucla")
+	caInfoResult, infoInterestError := client.ExpressInfoInterest(ndnEngine, caPrefix)
 	if infoInterestError != nil {
 		logger.Fatalf("Encountered error fetching CA INFO: %+v", infoInterestError)
 	}
-	caPublicIdentityKey, parseCertificatePublicKeyError := key_helpers.ParseCertificatePublicKey(caInfoResult.CaCertificate)
+	certKeyBits, _, certKeyBitsError := spec_2022.Spec{}.ReadData(enc.NewBufferReader(caInfoResult.CaCertificate))
+	if certKeyBitsError != nil {
+		logger.Fatal("Failed to parse certificate key bits data")
+	}
+	caPublicIdentityKey, parseCertificatePublicKeyError := key_helpers.ParsePublicKey(certKeyBits.Content().Join())
 	if parseCertificatePublicKeyError != nil {
 		logger.Fatalf("Failed to parse certificate public key from CA INFO: %+v", parseCertificatePublicKeyError)
 	}
 
-	requesterState, _ := client.NewRequesterState("client", "/ndn/edu/ucla", caPublicIdentityKey, 86300, ndnEngine)
+	requesterState, _ := client.NewRequesterState("client", caPrefix, caPublicIdentityKey, 86300, ndnEngine)
 	newResult, newError := requesterState.ExpressNewInterest()
 	if newError != nil {
 		logger.Fatalf("Encountered error in NEW: %+v", newError)
@@ -61,6 +68,7 @@ func main() {
 		}
 		logger.Infof("Email choice CHALLENGE step failed with result %+v", challengeResult)
 	}
+
 	for {
 		fmt.Print("Enter the secret code you received to your email: ")
 		bytePassword, _ := term.ReadPassword(syscall.Stdin)

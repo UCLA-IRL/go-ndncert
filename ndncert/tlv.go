@@ -52,15 +52,25 @@ type ChallengeInterestPlaintext struct {
 	Parameters map[string][]byte `tlv:"0x85"`
 }
 
+type CertificateName struct {
+	//+field:name
+	Name enc.Name `tlv:"0x07"`
+}
+
+type Links struct {
+	//+field:sequence:enc.Name:name
+	Names []enc.Name `tlv:"0x07"`
+}
+
 type ChallengeDataPlaintext struct {
 	//+field:natural
 	Status uint64 `tlv:"0x9B"`
-	//+field:string
-	ChallengeStatus string `tlv:"0xA3"`
-	//+field:name
-	IssuedCertificateName enc.Name `tlv:"0xA9"`
-	//+field:name
-	ForwardingHint enc.Name `tlv:"0x1e"`
+	//+field:string:optional
+	ChallengeStatus *string `tlv:"0xA3"`
+	//+field:struct:CertificateName
+	IssuedCertificateName *CertificateName `tlv:"0xA9"`
+	//+field:struct:Links
+	ForwardingHint *Links `tlv:"0x1e"`
 	//+field:natural:optional
 	RemainingTries *uint64 `tlv:"0xA5"`
 	//+field:natural:optional

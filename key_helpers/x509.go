@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/x509"
+	"fmt"
 	"math/big"
 	"time"
 )
@@ -13,6 +14,7 @@ func EncodePublicKey(key *ecdsa.PublicKey) ([]byte, error) {
 }
 
 func ParsePublicKey(der []byte) (*ecdsa.PublicKey, error) {
+	fmt.Println(der, len(der))
 	genericPublicKey, parsePublicKeyError := x509.ParsePKIXPublicKey(der)
 	if parsePublicKeyError != nil {
 		return nil, parsePublicKeyError

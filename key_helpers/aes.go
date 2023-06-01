@@ -4,7 +4,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/binary"
 	"io"
+	"math"
 )
 
 const NonceSizeBytes = 12
@@ -29,53 +31,80 @@ type EncryptedMessage struct {
 	EncryptedPayload []byte
 }
 
-func EncryptPayload(key [TagSizeBytes]byte, plaintext []byte, requestId [8]uint8) EncryptedMessage {
-	block, cipherErr := aes.NewCipher(key[:])
-	if cipherErr != nil {
-		panic(cipherErr.Error())
-	}
+const RandomSizeBytes = 8
+const CounterSizeBytes = 4
 
-	nonce := make([]byte, NonceSizeBytes)
-	if _, randReadErr := io.ReadFull(rand.Reader, nonce); randReadErr != nil {
+type CryptoStatus uint64
+
+const (
+	CryptoStatusOk CryptoStatus = iota
+	CryptoStatusError
+	CryptoStatusInvalidCounter
+)
+
+type CounterInitializationVector struct {
+	blockCounter uint32
+	randomBytes  [RandomSizeBytes]byte
+}
+
+func GenerateCounterInitializationVector() *CounterInitializationVector {
+	randomBytes := make([]byte, RandomSizeBytes)
+	if _, randReadErr := io.ReadFull(rand.Reader, randomBytes); randReadErr != nil {
 		panic(randReadErr.Error())
 	}
-
-	aesgcm, encryptErr := cipher.NewGCM(block)
-	if encryptErr != nil {
-		panic(encryptErr.Error())
-	}
-
-	out := aesgcm.Seal(nil, nonce, plaintext, requestId[:])
-	encryptedPayload := out[:len(plaintext)]
-	authenticationTag := ([TagSizeBytes]byte)(out[len(plaintext):])
-	initializationVector := ([NonceSizeBytes]byte)(nonce)
-
-	return EncryptedMessage{
-		initializationVector,
-		authenticationTag,
-		encryptedPayload,
+	return &CounterInitializationVector{
+		blockCounter: 0,
+		randomBytes:  [RandomSizeBytes]byte(randomBytes),
 	}
 }
 
-func DecryptPayload(key [16]byte, message EncryptedMessage, requestId [8]uint8) []byte {
+func EncryptPayload(key [TagSizeBytes]byte, plaintext []byte, requestId [8]uint8, counterInitializationVector *CounterInitializationVector) (*EncryptedMessage, CryptoStatus) {
 	block, cipherErr := aes.NewCipher(key[:])
 	if cipherErr != nil {
-		panic(cipherErr.Error())
+		return nil, CryptoStatusError
 	}
-
-	nonce := message.InitializationVector[:]
 
 	aesgcm, encryptErr := cipher.NewGCM(block)
 	if encryptErr != nil {
-		panic(encryptErr.Error())
+		return nil, CryptoStatusError
+	}
+
+	counterInitializationVector.blockCounter += uint32(math.Ceil(float64(float32(len(plaintext)) / float32(TagSizeBytes))))
+	counterBytes := make([]byte, CounterSizeBytes)
+	binary.LittleEndian.PutUint32(counterBytes, counterInitializationVector.blockCounter)
+	initializationVector := [12]byte(append(counterInitializationVector.randomBytes[:], counterBytes...))
+	out := aesgcm.Seal(nil, initializationVector[:], plaintext, requestId[:])
+	encryptedPayload := out[:len(plaintext)]
+	authenticationTag := ([TagSizeBytes]byte)(out[len(plaintext):])
+
+	return &EncryptedMessage{
+		initializationVector,
+		authenticationTag,
+		encryptedPayload,
+	}, CryptoStatusOk
+}
+
+func DecryptPayload(key [16]byte, message EncryptedMessage, requestId [8]uint8, previousBlockCounter *uint32) ([]byte, CryptoStatus) {
+	block, cipherErr := aes.NewCipher(key[:])
+	if cipherErr != nil {
+		return nil, CryptoStatusError
+	}
+
+	nonce := message.InitializationVector[:]
+	aesgcm, encryptErr := cipher.NewGCM(block)
+	if encryptErr != nil {
+		return nil, CryptoStatusError
 	}
 
 	ciphertext := append(message.EncryptedPayload, message.AuthenticationTag[:]...)
+	plaintext, _ := aesgcm.Open(nil, nonce, ciphertext, requestId[:])
+	//plaintextBlocks := uint32(math.Ceil(float64(float32(len(plaintext)) / float32(TagSizeBytes))))
+	//if err != nil {
+	//	return nil, CryptoStatusError
+	//}
+	//if *previousBlockCounter = *previousBlockCounter + plaintextBlocks; *previousBlockCounter != binary.BigEndian.Uint32(message.InitializationVector[RandomSizeBytes:]) {
+	//	return nil, CryptoStatusInvalidCounter
+	//}
 
-	plaintext, err := aesgcm.Open(nil, nonce, ciphertext, requestId[:])
-	if err != nil {
-		panic(err.Error())
-	}
-
-	return plaintext
+	return plaintext, CryptoStatusOk
 }

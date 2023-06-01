@@ -157,13 +157,15 @@ type CaConfig struct {
 }
 
 type ChallengeRequestState struct {
-	requestId           RequestId
-	status              ChallengeStatus
-	encryptionKey       [16]byte
-	challengeType       ChallengeType
-	emailChallengeState *EmailChallengeState
-	challengeState      *ChallengeState
-	clientPublicKey     *ecdsa.PublicKey
+	requestId                   RequestId
+	status                      ChallengeStatus
+	encryptionKey               [16]byte
+	challengeType               ChallengeType
+	emailChallengeState         *EmailChallengeState
+	challengeState              *ChallengeState
+	clientPublicKey             *ecdsa.PublicKey
+	counterInitializationVector *key_helpers.CounterInitializationVector
+	clientBlockCounter          *uint32
 }
 
 type CaState struct {
@@ -174,6 +176,7 @@ type CaState struct {
 	//NotBefore             time.Time
 	//NotAfter              time.Time
 	CaPrefix       string
+	CaCertName     string
 	CaInfo         string
 	MaxValidPeriod time.Duration
 	CaCert         *x509.Certificate
@@ -188,10 +191,11 @@ type CaState struct {
 const negativeRequestIdOffset = -2
 
 func NewCaState(caPrefix string, caInfo string, maxValidPeriod uint64, caCert *x509.Certificate, caCertBytes []byte, identityKey *ecdsa.PrivateKey, smtpModule *email.SmtpModule) (*CaState, error) {
-	// TODO: Figure out key locator name for CA's identity key
+	// TODO: Figure out key locator name for CA's identity key - derive name from certificate
 	keyLocatorName, _ := enc.NameFromStr("/ndn/edu/ucla/KEY")
 	caState := &CaState{
 		CaCert:                       caCert,
+		CaCertName:                   "", // TODO
 		CaCertBytes:                  caCertBytes,
 		CaPrefix:                     caPrefix,
 		CaInfo:                       caInfo,
@@ -209,7 +213,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	logger.Infof("Preparing to serve with CaState: %+v", caState)
 
 	// Register the route
-	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix)
+	caPrefixName, _ := enc.NameFromStr(caState.CaPrefix + "/CA")
 	logger.Infof("Setting up routing with ca prefix name: %s", caPrefixName)
 	registerRouteError := ndnEngine.RegisterRoute(caPrefixName)
 	if registerRouteError != nil {
@@ -221,12 +225,25 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 	if caState.CaCertBytes == nil {
 		// Create a self-signed certificate in the case we don't have a signed one (caCertBytes) passed in
 		// We assume that this CA functions as a root CA
-		certificateBytes, createCertificateError := x509.CreateCertificate(rand.Reader, caState.CaCert, caState.CaCert, &caState.IdentityKey.PublicKey, caState.IdentityKey)
-		if createCertificateError != nil {
-			logger.Errorf("Failed to generate certificate: %s", createCertificateError.Error())
-			return createCertificateError
+		publicKeyBits, publicKeyEncodeError := key_helpers.EncodePublicKey(&caState.IdentityKey.PublicKey)
+		if publicKeyEncodeError != nil {
+			logger.Errorf("Failed to generate certificate: %s", publicKeyEncodeError.Error())
+			return publicKeyEncodeError
 		}
-		caState.CaCertBytes = certificateBytes
+		certName, _ := enc.NameFromStr(caState.CaCertName)
+		certData, _, makeCertError := spec_2022.Spec{}.MakeData(
+			certName, &ndn.DataConfig{
+				ContentType: utils.IdPtr(ndn.ContentTypeKey),
+				Freshness:   utils.IdPtr(time.Hour),
+			},
+			enc.Wire{publicKeyBits},
+			sec.NewEccSigner(true, false, time.Duration(0), caState.IdentityKey, certName),
+		)
+		if makeCertError != nil {
+			logger.Errorf("Failed to make certificate data: %s", makeCertError.Error())
+			return makeCertError
+		}
+		caState.CaCertBytes = certData.Join()
 	}
 	caProfile := ndncert.CaProfile{
 		CaPrefix:       caPrefixName,
@@ -276,9 +293,7 @@ func (caState *CaState) Serve(ndnEngine ndn.Engine) error {
 func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCovered enc.Wire, reply ndn.ReplyFunc, deadline time.Time) {
 	logger := log.WithField("module", "ca")
 	logger.Infof("Handling incoming NEW Interest with name: %s", interest.Name().String())
-	logger.Debugf("Raw interest app params: %s", interest.AppParam())
 	newInterest, _ := ndncert.ParseNewInterestAppParameters(enc.NewWireReader(interest.AppParam()), true)
-	logger.Debugf("succeeded parsing")
 	certRequestData, certRequestSigCovered, readCertDataError := spec_2022.Spec{}.ReadData(enc.NewBufferReader(newInterest.CertRequest))
 	if readCertDataError != nil {
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
@@ -303,13 +318,11 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 		replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
 		return
 	}
-	logger.Infof("Validating with public key: %+v", publicKey)
 	if !sec.EcdsaValidate(sigCovered, interest.Signature(), publicKey) {
 		logger.Error("Bad CHALLENGE interest received: bad signature detected")
 		replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
 		return
 	}
-
 	notBefore, notAfter := certRequestData.Signature().Validity()
 	if notBefore.After(*notAfter) {
 		logger.Error("Bad NEW interest certificate received: notBefore comes after notAfter")
@@ -333,13 +346,15 @@ func (caState *CaState) OnNew(interest ndn.Interest, rawInterest enc.Wire, sigCo
 	requestId := generateRequestId(caState)
 
 	caState.ChallengeRequestStateMapping[requestId] = &ChallengeRequestState{
-		requestId:           requestId,
-		status:              ChallengeStatusNewInterestReceived,
-		encryptionKey:       ([16]byte)(key_helpers.HKDF(ecdhState.GetSharedSecret(), salt)),
-		challengeType:       TbdChallengeType,
-		challengeState:      nil,
-		emailChallengeState: nil,
-		clientPublicKey:     publicKey,
+		requestId:                   requestId,
+		status:                      ChallengeStatusNewInterestReceived,
+		encryptionKey:               ([16]byte)(key_helpers.HKDF(ecdhState.GetSharedSecret(), salt, key_helpers.RequestId(requestId))),
+		challengeType:               TbdChallengeType,
+		challengeState:              nil,
+		emailChallengeState:         nil,
+		clientPublicKey:             publicKey,
+		counterInitializationVector: key_helpers.GenerateCounterInitializationVector(),
+		clientBlockCounter:          utils.IdPtr(uint32(0)),
 	}
 
 	newData := ndncert.NewData{
@@ -366,7 +381,6 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		replyWithError(ErrorCodeBadInterestFormat, interest.Name(), reply, caState.Signer)
 		return
 	}
-
 	requestId := (RequestId)([]byte(nameComponents[len(nameComponents)+negativeRequestIdOffset]))
 	challengeRequestState, ok := caState.ChallengeRequestStateMapping[requestId]
 	if !ok {
@@ -374,13 +388,11 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
 		return
 	}
-	logger.Infof("Validating with public key: %+v", challengeRequestState.clientPublicKey)
 	if !sec.EcdsaValidate(sigCovered, interest.Signature(), challengeRequestState.clientPublicKey) {
 		logger.Error("Bad CHALLENGE interest received: bad signature detected")
 		replyWithError(ErrorCodeBadSignature, interest.Name(), reply, caState.Signer)
 		return
 	}
-
 	encryptedMessageReader := enc.NewWireReader(interest.AppParam())
 	encryptedMessage, _ := ndncert.ParseEncryptedMessage(encryptedMessageReader, true)
 	initializationVector := ([key_helpers.NonceSizeBytes]byte)(encryptedMessage.InitializationVector)
@@ -390,10 +402,11 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 		AuthenticationTag:    authenticationTag,
 		EncryptedPayload:     encryptedMessage.EncryptedPayload,
 	}
-
-	plaintext := key_helpers.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId)
+	plaintext, decryptStatus := key_helpers.DecryptPayload(challengeRequestState.encryptionKey, encryptedMessageObject, requestId, challengeRequestState.clientBlockCounter)
+	if decryptStatus != key_helpers.CryptoStatusOk {
+		// TODO: Handle failure to decrypt
+	}
 	challengeInterestPlaintext, _ := ndncert.ParseChallengeInterestPlaintext(enc.NewBufferReader(plaintext), true)
-
 	if !slices.Contains(AvailableChallenges, challengeInterestPlaintext.SelectedChallenge) {
 		logger.Error("Bad CHALLENGE interest received: invalid selected challenge detected")
 		replyWithError(ErrorCodeInvalidParameters, interest.Name(), reply, caState.Signer)
@@ -430,11 +443,14 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				}
 				plaintextChallenge := ndncert.ChallengeDataPlaintext{
 					Status:          ApplicationStatusCodeChallenge,
-					ChallengeStatus: ChallengeStatusCodeInvalidEmail,
+					ChallengeStatus: utils.IdPtr(ChallengeStatusCodeInvalidEmail),
 					RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 					RemainingTime:   &remainingTimeUint64,
 				}
-				encryptedChallenge := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+				encryptedChallenge, encryptStatus := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId, challengeRequestState.counterInitializationVector)
+				if encryptStatus != key_helpers.CryptoStatusOk {
+					// TODO: Handle failure to encrypt here
+				}
 				challengeEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedChallenge.InitializationVector[:],
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
@@ -446,11 +462,14 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 			challengeRequestState.status = ChallengeStatusChallengeIssued
 			plaintextChallenge := ndncert.ChallengeDataPlaintext{
 				Status:          ApplicationStatusCodeChallenge,
-				ChallengeStatus: ChallengeStatusCodeNeedCode,
+				ChallengeStatus: utils.IdPtr(ChallengeStatusCodeNeedCode),
 				RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 				RemainingTime:   &remainingTimeUint64,
 			}
-			encryptedChallenge := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+			encryptedChallenge, encryptStatus := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId, challengeRequestState.counterInitializationVector)
+			if encryptStatus != key_helpers.CryptoStatusOk {
+				// TODO: Handle failure to encrypt
+			}
 			challengeEncryptedMessage := ndncert.EncryptedMessage{
 				InitializationVector: encryptedChallenge.InitializationVector[:],
 				AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
@@ -488,11 +507,14 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 				}
 				plaintextChallenge := ndncert.ChallengeDataPlaintext{
 					Status:          ApplicationStatusCodeChallenge,
-					ChallengeStatus: ChallengeStatusWrongCode,
+					ChallengeStatus: utils.IdPtr(ChallengeStatusWrongCode),
 					RemainingTries:  &challengeRequestState.challengeState.RemainingAttempts,
 					RemainingTime:   &remainingTimeUint64,
 				}
-				encryptedChallenge := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId)
+				encryptedChallenge, encryptStatus := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextChallenge.Encode().Join(), requestId, challengeRequestState.counterInitializationVector)
+				if encryptStatus != key_helpers.CryptoStatusOk {
+					// TODO: Handle failure to encrypt here
+				}
 				challengeEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedChallenge.InitializationVector[:],
 					AuthenticationTag:    encryptedChallenge.AuthenticationTag[:],
@@ -503,10 +525,13 @@ func (caState *CaState) OnChallenge(interest ndn.Interest, rawInterest enc.Wire,
 			} else {
 				plaintextSuccess := ndncert.ChallengeDataPlaintext{
 					Status:                ApplicationStatusCodeSuccess,
-					ChallengeStatus:       ChallengeStatusCodeSuccess,
+					ChallengeStatus:       utils.IdPtr(ChallengeStatusCodeSuccess),
 					IssuedCertificateName: generateCertificateName(caState),
 				}
-				encryptedSuccess := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextSuccess.Encode().Join(), requestId)
+				encryptedSuccess, encryptStatus := key_helpers.EncryptPayload(challengeRequestState.encryptionKey, plaintextSuccess.Encode().Join(), requestId, challengeRequestState.counterInitializationVector)
+				if encryptStatus != key_helpers.CryptoStatusOk {
+					// TODO: Handle failure to encrypt
+				}
 				successEncryptedMessage := ndncert.EncryptedMessage{
 					InitializationVector: encryptedSuccess.InitializationVector[:],
 					AuthenticationTag:    encryptedSuccess.AuthenticationTag[:],
@@ -544,10 +569,10 @@ func generateRequestId(caState *CaState) RequestId {
 	return requestId
 }
 
-func generateCertificateName(caState *CaState) enc.Name {
+func generateCertificateName(caState *CaState) *ndncert.CertificateName {
 	// Generate random certificate name by taking ca prefix and appending a 16-long string
 	certificateName, _ := enc.NameFromStr(caState.CaPrefix + "/" + uniuri.New())
-	return certificateName
+	return &ndncert.CertificateName{Name: certificateName}
 }
 
 func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyFunc, ndnSigner ndn.Signer) {
@@ -577,7 +602,6 @@ func replyWithError(errorCode ErrorCode, interestName enc.Name, reply ndn.ReplyF
 
 func replyWithData(interestName enc.Name, dataWire enc.Wire, reply ndn.ReplyFunc, ndnSigner ndn.Signer) {
 	logger := log.WithField("module", "ca")
-	logger.Infof("Replying with data")
 	data, _, makeDataError := spec_2022.Spec{}.MakeData(
 		interestName,
 		&ndn.DataConfig{

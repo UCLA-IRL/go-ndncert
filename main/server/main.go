@@ -27,6 +27,7 @@ func passAll(enc.Name, enc.Wire, ndn.Signature) bool {
 func main() {
 	log.SetLevel(log.DebugLevel)
 	logger := log.WithField("module", "main")
+	caPrefix := "/abc"
 
 	// Start engine
 	ndnTimer := basic_engine.NewTimer()
@@ -63,7 +64,7 @@ func main() {
 		SignatureAlgorithm:    x509.ECDSAWithSHA256,
 		BasicConstraintsValid: true,
 	}
-	caState, caStateSetupError := server.NewCaState("/ndn/edu/ucla", "A really cool ndncert CA server", 31556926, caCert, nil, certKey, smtpModule)
+	caState, caStateSetupError := server.NewCaState(caPrefix, "A really cool ndncert CA server", 31556926, caCert, nil, certKey, smtpModule)
 	if caStateSetupError != nil {
 		logger.Fatalf("Error encountered setting up CA State: %+v", caStateSetupError)
 	}
