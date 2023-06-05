@@ -48,38 +48,46 @@ func main() {
 		logger.Fatalf("Failed to parse certificate public key from CA INFO: %+v", parseCertificatePublicKeyError)
 	}
 
-	requesterState, _ := client.NewRequesterState("client", caPrefix, caPublicIdentityKey, 86300, ndnEngine)
+	// Here, we only allow the email to be done one time (else the program has to be re-run).
+	// This is due to the fact that the cert-generated *should* be done when instantiating a new requester state
+	// which subsequently requires a certificate following a specific format according to ndncert-cxx.
+	var email string
+	fmt.Print("Enter the email you wish to send the secret code to: ")
+	fmt.Scanln(&email)
+	requesterState, _ := client.NewRequesterState("client", email, caPrefix, caPublicIdentityKey, 3600, ndnEngine)
 	newResult, newError := requesterState.ExpressNewInterest()
 	if newError != nil {
 		logger.Fatalf("Encountered error in NEW: %+v", newError)
 	}
+	if newResult.ErrorMessage != nil {
+		logger.Fatalf("Encountered error message in NEW: %+v", *newResult.ErrorMessage)
+	}
 	logger.Infof("NEW step succeeded with result %+v", newResult)
-	for {
-		var email string
-		fmt.Print("Enter the email you wish to send the secret code to: ")
-		fmt.Scanln(&email)
-		challengeResult, challengeError := requesterState.ExpressEmailChoiceChallenge(email)
-		if challengeError != nil {
-			logger.Fatalf("Encountered error email choice CHALLENGE step: %+v", challengeError)
-		}
-		if challengeResult.ChallengeStatus == client.ChallengeStatusAfterSelectionChallengeData {
-			logger.Infof("Email choice CHALLENGE step succeeded with result %+v", challengeResult)
-			break
-		}
-		logger.Infof("Email choice CHALLENGE step failed with result %+v", challengeResult)
+	emailChoiceChallengeResult, emailChoiceChallengeError := requesterState.ExpressEmailChoiceChallenge()
+	if emailChoiceChallengeError != nil {
+		logger.Fatalf("Encountered error email choice CHALLENGE step: %+v\n with error message: %+v", emailChoiceChallengeError, emailChoiceChallengeResult.ErrorMessage)
+	}
+	if emailChoiceChallengeResult.ErrorMessage != nil {
+		logger.Fatalf("Encountered error message in NEW: %+v", *emailChoiceChallengeResult.ErrorMessage)
+	}
+	if *emailChoiceChallengeResult.ChallengeStatus == client.ChallengeStatusAfterSelectionChallengeData {
+		logger.Infof("Email choice CHALLENGE step succeeded with result %+v", emailChoiceChallengeResult)
 	}
 
 	for {
 		fmt.Print("Enter the secret code you received to your email: ")
 		bytePassword, _ := term.ReadPassword(syscall.Stdin)
-		challengeResult, challengeError := requesterState.ExpressEmailCodeChallenge(string(bytePassword))
-		if challengeError != nil {
-			logger.Fatalf("Encountered error email code CHALLENGE step: %+v", challengeError)
+		emailCodeChallengeResult, emailCodeChallengeError := requesterState.ExpressEmailCodeChallenge(string(bytePassword))
+		if emailCodeChallengeError != nil {
+			logger.Fatalf("Encountered error email code CHALLENGE step: %+v\n with error message %+v", emailCodeChallengeError, *emailCodeChallengeResult.ErrorMessage)
 		}
-		if challengeResult.ChallengeStatus == client.ChallengeStatusSuccess {
-			logger.Infof("Email code CHALLENGE step succeeded with result %+v", challengeResult)
+		if emailCodeChallengeResult.ErrorMessage != nil {
+			logger.Fatalf("Encountered error message in NEW: %+v", *emailCodeChallengeResult.ErrorMessage)
+		}
+		if *emailCodeChallengeResult.ChallengeStatus == client.ChallengeStatusSuccess {
+			logger.Infof("Email code CHALLENGE step succeeded with result %+v", emailCodeChallengeResult)
 			break
 		}
-		logger.Infof("Email code CHALLENGE step failed with result %+v", challengeResult)
+		logger.Infof("Email code CHALLENGE step failed with result %+v", emailCodeChallengeResult, emailCodeChallengeResult.ErrorMessage)
 	}
 }

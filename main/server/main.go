@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/x509"
 	"fmt"
 	"github.com/apex/log"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
@@ -13,7 +12,6 @@ import (
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"go-ndncert/email"
 	"go-ndncert/ndncert/server"
-	"math/big"
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,7 +25,6 @@ func passAll(enc.Name, enc.Wire, ndn.Signature) bool {
 func main() {
 	log.SetLevel(log.DebugLevel)
 	logger := log.WithField("module", "main")
-	caPrefix := "/abc"
 
 	// Start engine
 	ndnTimer := basic_engine.NewTimer()
@@ -54,17 +51,17 @@ func main() {
 	}
 
 	// Set up CaState
-	caCert := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Second * time.Duration(86400)),
-		IsCA:                  true,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		SignatureAlgorithm:    x509.ECDSAWithSHA256,
-		BasicConstraintsValid: true,
-	}
-	caState, caStateSetupError := server.NewCaState(caPrefix, "A really cool ndncert CA server", 31556926, caCert, nil, certKey, smtpModule)
+	caState, caStateSetupError := server.NewCaState(
+		"/ndn/edu/ucla/KEY/123456/self/v=1",
+		nil,
+		"A really cool ndncert CA server",
+		"/ndn",
+		certKey,
+		360000,
+		time.Now(),
+		time.Now().Add(time.Hour*24),
+		smtpModule,
+	)
 	if caStateSetupError != nil {
 		logger.Fatalf("Error encountered setting up CA State: %+v", caStateSetupError)
 	}

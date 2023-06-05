@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/apex/log"
-	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
@@ -17,6 +16,7 @@ import (
 	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert"
 	"go-ndncert/ndncert/server"
+	"strings"
 	"time"
 )
 
@@ -41,17 +41,19 @@ type InfoResult struct {
 }
 
 type NewResult struct {
-	RequestId           RequestId
-	AvailableChallenges []string
+	RequestId           *RequestId
+	AvailableChallenges *[]string
+	ErrorMessage        *ndncert.ErrorMessage
 }
 
 type ChallengeResult struct {
-	ChallengeStatus       ChallengeStatus
-	RemainingTime         uint64
-	RemainingTries        uint64
+	ChallengeStatus       *ChallengeStatus
+	RemainingTime         *uint64
+	RemainingTries        *uint64
 	IssuedCertificateName enc.Name
 	ForwardingHint        *ndncert.Links
-	IssuedCertificateBits []byte
+	IssuedCertificateBits *[]byte
+	ErrorMessage          *ndncert.ErrorMessage
 }
 
 type requesterState struct {
@@ -68,9 +70,13 @@ type requesterState struct {
 	counterInitializationVector *key_helpers.CounterInitializationVector
 	serverBlockCounter          *uint32
 	symmetricKey                [16]byte
+
+	emailAddress *string // Specific to email challenge
 }
 
-func NewRequesterState(requesterName string, caPrefix string, caPublicIdentityKey *ecdsa.PublicKey, certValidityPeriod uint64, ndnEngine ndn.Engine) (*requesterState, error) {
+// TODO: Handle error messages
+
+func NewRequesterState(requesterName string, emailAddress string, caPrefix string, caPublicIdentityKey *ecdsa.PublicKey, certValidityPeriod uint64, ndnEngine ndn.Engine) (*requesterState, error) {
 	logger := log.WithField("module", "requester")
 	logger.Infof("Generating a requester state with Requester Name %s and Ca Prefix %s", requesterName, caPrefix)
 
@@ -93,9 +99,7 @@ func NewRequesterState(requesterName string, caPrefix string, caPublicIdentityKe
 	}
 
 	// Generate the cert-request
-	keyId := uniuri.NewLen(8)
-	//certName, _ := enc.NameFromStr(fmt.Sprintf("%s/%s/KEY/%s/self/v=1", caPrefix, requesterName, hex.EncodeToString([]byte(keyId))))
-	certName, _ := enc.NameFromStr(fmt.Sprintf("/ndn/com/gmail/ricky99.guo/KEY/%s/self/v=1", keyId))
+	certName := getCertNameFromEmailAddress(caPrefix, emailAddress)
 	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
 		certName,
 		&ndn.DataConfig{
@@ -122,6 +126,7 @@ func NewRequesterState(requesterName string, caPrefix string, caPublicIdentityKe
 		interestSigner:              sec.NewEccSigner(false, true, time.Duration(0), certKey, certName),
 		serverBlockCounter:          utils.IdPtr(uint32(0)),
 		ndnEngine:                   ndnEngine,
+		emailAddress:                &emailAddress,
 	}, nil
 }
 
@@ -192,6 +197,12 @@ func (requester *requesterState) ExpressNewInterest() (*NewResult, error) {
 				ch <- struct{}{}
 				return
 			}
+			errorMessage := attemptErrorMessageParse(data.Content())
+			if errorMessage != nil {
+				newResult = &NewResult{ErrorMessage: errorMessage}
+				ch <- struct{}{}
+				return
+			}
 			switch requester.challengeStatus {
 			case ChallengeStatusBeforeChallenge:
 				newData, _ := ndncert.ParseNewData(enc.NewWireReader(data.Content()), true)
@@ -201,8 +212,8 @@ func (requester *requesterState) ExpressNewInterest() (*NewResult, error) {
 				requester.symmetricKey = [16]byte(key_helpers.HKDF(sharedSecret, newData.Salt, key_helpers.RequestId(requester.requestId)))
 				requester.challengeStatus = ChallengeStatusAfterNewData
 				newResult = &NewResult{
-					RequestId:           requester.requestId,
-					AvailableChallenges: newData.Challenge,
+					RequestId:           &requester.requestId,
+					AvailableChallenges: &newData.Challenge,
 				}
 			}
 			ch <- struct{}{}
@@ -220,15 +231,15 @@ func (requester *requesterState) ExpressNewInterest() (*NewResult, error) {
 	return newResult, nil
 }
 
-func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string) (*ChallengeResult, error) {
+func (requester *requesterState) ExpressEmailChoiceChallenge() (*ChallengeResult, error) {
 	logger := log.WithField("module", "requester")
-	logger.Infof("Generating an email code choice CHALLENGE with email: %s", emailAddress)
+	logger.Infof("Generating an email code choice CHALLENGE with email: %s", *requester.emailAddress)
 	if requester.challengeStatus != ChallengeStatusAfterNewData {
 		logger.Error("Bad attempt to generate email choice CHALLENGE: does not follow NEW interest")
 		return nil, errors.New("invalid Email Choice Challenge attempted")
 	}
 	emailParameters := map[string][]byte{
-		server.SelectedChallengeEmail: []byte(emailAddress),
+		server.SelectedChallengeEmail: []byte(*requester.emailAddress),
 	}
 	challengeInterestName, _ := enc.NameFromStr(requester.caPrefix + server.PrefixChallenge + "/" + string(requester.requestId[:]))
 	challengeInterestPlaintext := ndncert.ChallengeInterestPlaintext{
@@ -237,7 +248,8 @@ func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string
 	}
 	encryptedMessage, encryptStatus := key_helpers.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId, requester.counterInitializationVector)
 	if encryptStatus != key_helpers.CryptoStatusOk {
-		// TODO: error handling for invalid crypto status
+		logger.Error("Failed to encrypt challenge message")
+		return nil, errors.New("failed to encrypt challenge message")
 	}
 	challengeInterestAppParameters := ndncert.EncryptedMessage{
 		InitializationVector: encryptedMessage.InitializationVector[:],
@@ -268,40 +280,56 @@ func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string
 				ch <- struct{}{}
 				return
 			}
+			errorMessage := attemptErrorMessageParse(data.Content())
+			if errorMessage != nil {
+				challengeResult = &ChallengeResult{ErrorMessage: errorMessage}
+				ch <- struct{}{}
+				return
+			}
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
 			encryptedMessage := key_helpers.EncryptedMessage{
 				InitializationVector: [12]byte(encryptedChallengeData.InitializationVector),
 				AuthenticationTag:    [16]byte(encryptedChallengeData.AuthenticationTag),
 				EncryptedPayload:     encryptedChallengeData.EncryptedPayload,
 			}
+			var remainingTime, remainingTries uint64
 			plaintext, decryptStatus := key_helpers.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId, requester.serverBlockCounter)
 			if decryptStatus != key_helpers.CryptoStatusOk {
-				// TODO: handle decryption failure
-			}
-			challengeData, challengeDataParseError := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
-			if challengeDataParseError != nil {
-				logger.Infof("Failed to parse challenge data plaintext: %+v\n Data packet bytes: %b", challengeDataParseError.Error(), plaintext)
+				challengeResult.ChallengeStatus = utils.IdPtr(ChallengeStatusFailure)
 				ch <- struct{}{}
 				return
-			}
-			logger.Infof("challengeData: %+v", challengeData)
-			if challengeData.ChallengeStatus == nil {
-				// TODO: Handle error of nil challenge status
 			} else {
-				switch {
-				case *challengeData.ChallengeStatus == server.ChallengeStatusCodeInvalidEmail:
-					logger.Error("Failed email choice CHALLENGE: invalid email")
-					logger.Infof("Remaining tries: %d", challengeData.RemainingTries)
-					logger.Infof("Remaining time: %d", challengeData.RemainingTime)
-				case *challengeData.ChallengeStatus == server.ChallengeStatusCodeNeedCode:
-					logger.Info("Successfully submitted email choice to server")
-					requester.challengeStatus = ChallengeStatusAfterSelectionChallengeData
+				challengeData, challengeDataParseError := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
+				if challengeDataParseError != nil {
+					logger.Infof("Failed to parse challenge data plaintext: %+v\n Data packet bytes: %b", challengeDataParseError.Error(), plaintext)
+					ch <- struct{}{}
+					return
+				}
+				logger.Infof("challengeData: %+v", challengeData)
+				if challengeData.ChallengeStatus == nil {
+					requester.challengeStatus = ChallengeStatusFailure
+				} else {
+					switch {
+					case *challengeData.ChallengeStatus == server.ChallengeStatusCodeInvalidEmail:
+						logger.Error("Failed email choice CHALLENGE: invalid email")
+						logger.Infof("Remaining tries: %d", challengeData.RemainingTries)
+						logger.Infof("Remaining time: %d", challengeData.RemainingTime)
+					case *challengeData.ChallengeStatus == server.ChallengeStatusCodeNeedCode:
+						logger.Info("Successfully submitted email choice to server")
+						requester.challengeStatus = ChallengeStatusAfterSelectionChallengeData
+					}
+				}
+				if challengeData.RemainingTime != nil {
+					remainingTime = *challengeData.RemainingTime
+				}
+				if challengeData.RemainingTries != nil {
+					remainingTime = *challengeData.RemainingTries
 				}
 			}
 			challengeResult = &ChallengeResult{
-				ChallengeStatus: requester.challengeStatus,
-				RemainingTime:   *challengeData.RemainingTime,
-				RemainingTries:  *challengeData.RemainingTries,
+				ChallengeStatus: &requester.challengeStatus,
+				RemainingTime:   &remainingTime,
+				RemainingTries:  &remainingTries,
 			}
 			ch <- struct{}{}
 		},
@@ -339,7 +367,8 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) (*
 	}
 	encryptedMessage, encryptStatus := key_helpers.EncryptPayload(requester.symmetricKey, challengeInterestPlaintext.Encode().Join(), requester.requestId, requester.counterInitializationVector)
 	if encryptStatus != key_helpers.CryptoStatusOk {
-		// TODO: Handle encryption failure
+		logger.Error("Failed to encrypt challenge message")
+		return nil, errors.New("failed to encrypt challenge message")
 	}
 	challengeInterestAppParameters := ndncert.EncryptedMessage{
 		InitializationVector: encryptedMessage.InitializationVector[:],
@@ -370,6 +399,12 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) (*
 				ch <- struct{}{}
 				return
 			}
+			errorMessage := attemptErrorMessageParse(data.Content())
+			if errorMessage != nil {
+				challengeResult = &ChallengeResult{ErrorMessage: errorMessage}
+				ch <- struct{}{}
+				return
+			}
 			encryptedChallengeData, _ := ndncert.ParseEncryptedMessage(enc.NewWireReader(data.Content()), true)
 			logger.Infof("ecd: %+v\n", encryptedChallengeData)
 			encryptedMessage := key_helpers.EncryptedMessage{
@@ -378,33 +413,40 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) (*
 				EncryptedPayload:     encryptedChallengeData.EncryptedPayload,
 			}
 			plaintext, decryptStatus := key_helpers.DecryptPayload(requester.symmetricKey, encryptedMessage, requester.requestId, requester.serverBlockCounter)
-			if decryptStatus != key_helpers.CryptoStatusOk {
-				// TODO: handle decryption failure
-			}
-			challengeData, _ := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
-			if challengeData.IssuedCertificateName != nil {
-				logger.Infof(
-					"Successfully issued certificate with name %s", challengeData.IssuedCertificateName.Name.String())
-				requester.challengeStatus = ChallengeStatusSuccess
-			} else {
-				logger.Error("Failed email code CHALLENGE: incorrect code")
-				logger.Infof("Remaining tries: %d", *challengeData.RemainingTries)
-				logger.Infof("Remaining time: %d", *challengeData.RemainingTime)
-			}
 			remainingTime := 0
-			if challengeData.RemainingTime != nil {
-				remainingTime = int(*challengeData.RemainingTime)
-			}
 			remainingTries := 0
-			if challengeData.RemainingTries != nil {
-				remainingTries = int(*challengeData.RemainingTries)
+			var issuedCertificateName enc.Name
+			var forwardingHint *ndncert.Links
+			if decryptStatus != key_helpers.CryptoStatusOk {
+				logger.Error("Failed to decrypt challenge message, aborting request")
+				requester.challengeStatus = ChallengeStatusFailure
+				ch <- struct{}{}
+			} else {
+				challengeData, _ := ndncert.ParseChallengeDataPlaintext(enc.NewBufferReader(plaintext), true)
+				if challengeData.IssuedCertificateName != nil {
+					logger.Infof(
+						"Successfully issued certificate with name %s", challengeData.IssuedCertificateName.Name.String())
+					requester.challengeStatus = ChallengeStatusSuccess
+				} else {
+					logger.Error("Failed email code CHALLENGE: incorrect code")
+					logger.Infof("Remaining tries: %d", *challengeData.RemainingTries)
+					logger.Infof("Remaining time: %d", *challengeData.RemainingTime)
+				}
+				if challengeData.RemainingTime != nil {
+					remainingTime = int(*challengeData.RemainingTime)
+				}
+				if challengeData.RemainingTries != nil {
+					remainingTries = int(*challengeData.RemainingTries)
+				}
+				issuedCertificateName = challengeData.IssuedCertificateName.Name
+				forwardingHint = challengeData.ForwardingHint
 			}
 			challengeResult = &ChallengeResult{
-				ChallengeStatus:       requester.challengeStatus,
-				RemainingTime:         uint64(remainingTime),
-				RemainingTries:        uint64(remainingTries),
-				IssuedCertificateName: challengeData.IssuedCertificateName.Name,
-				ForwardingHint:        challengeData.ForwardingHint,
+				ChallengeStatus:       &requester.challengeStatus,
+				RemainingTime:         utils.IdPtr(uint64(remainingTime)),
+				RemainingTries:        utils.IdPtr(uint64(remainingTries)),
+				IssuedCertificateName: issuedCertificateName,
+				ForwardingHint:        forwardingHint,
 			}
 			ch <- struct{}{}
 		},
@@ -421,24 +463,27 @@ func (requester *requesterState) ExpressEmailCodeChallenge(secretCode string) (*
 	if challengeResult.IssuedCertificateName != nil {
 		logger.Infof(
 			"Fetching %s now", challengeResult.IssuedCertificateName.String())
-		certificateBytes, certificateFetchError := expressCertificateFetch(challengeResult.IssuedCertificateName, challengeResult.ForwardingHint.Names, requester.ndnEngine)
+		logger.Infof("%+v, %+v, %+v", challengeResult.IssuedCertificateName, challengeResult.ForwardingHint, requester.ndnEngine)
+		certificateBytes, certificateFetchError := expressCertificateFetch(challengeResult.IssuedCertificateName, challengeResult.ForwardingHint, requester.ndnEngine)
 		if certificateFetchError != nil {
 			logger.Errorf("Failed to fetch certificate: %s", certificateFetchError.Error())
 		} else {
-			challengeResult.IssuedCertificateBits = certificateBytes
+			challengeResult.IssuedCertificateBits = &certificateBytes
 		}
 	}
 	return challengeResult, nil
 }
 
-func expressCertificateFetch(certificateName enc.Name, forwardingHint []enc.Name, ndnEngine ndn.Engine) ([]byte, error) {
+func expressCertificateFetch(certificateName enc.Name, forwardingHint *ndncert.Links, ndnEngine ndn.Engine) ([]byte, error) {
 	logger := log.WithField("module", "requester")
 	logger.Infof("Expressing certificate fetch for certificate: %s", certificateName.String())
 	logger.Infof("Getting forward hint: %+v", forwardingHint)
 	interestConfig := &ndn.InterestConfig{
-		CanBePrefix:    false,
-		MustBeFresh:    true,
-		ForwardingHint: forwardingHint,
+		CanBePrefix: false,
+		MustBeFresh: true,
+	}
+	if forwardingHint != nil {
+		interestConfig.ForwardingHint = forwardingHint.Names
 	}
 	interestWire, _, finalName, makeInterestError := spec_2022.Spec{}.MakeInterest(
 		certificateName,
@@ -496,6 +541,37 @@ func validateNdnInterestResult(result ndn.InterestResult, nackReason *uint64) er
 		return errors.New("info failed: interest timed out")
 	case ndn.InterestCancelled:
 		return errors.New("info failed: interest cancelled")
+	}
+	return nil
+}
+
+// Specialized function to handle the specific certificate format of ndncert-cxx - cert name must follow
+// the following convention - (Assuming email form username@domainname.extension) ca_prefix/extension/domain/username
+func getCertNameFromEmailAddress(caPrefix string, emailAddress string) enc.Name {
+	atSplit := strings.Split(emailAddress, "@")
+	if len(atSplit) != 2 {
+		return nil
+	}
+	dotSplit := strings.Split(atSplit[1], ".")
+	var stringBuilder strings.Builder
+	stringBuilder.WriteString(caPrefix)
+	stringBuilder.WriteString("/" + atSplit[0])
+	for i := len(dotSplit) - 1; i >= 0; i-- {
+		stringBuilder.WriteString("/" + dotSplit[i])
+	}
+	certName, _ := enc.NameFromStr(stringBuilder.String())
+	return certName
+}
+
+// No way to actually "mime" the type of the message - error or regular, so we have to attempt error message parsing.
+func attemptErrorMessageParse(content enc.Wire) *ndncert.ErrorMessage {
+	errorMessage, _ := ndncert.ParseErrorMessage(enc.NewWireReader(content), true)
+	if errorMessage != nil {
+		// Further verify (because arguments are not optional and will default to 0/"").
+		if errorMessage.ErrorCode == 0 || errorMessage.ErrorInfo == "" {
+			return nil
+		}
+		return errorMessage
 	}
 	return nil
 }
