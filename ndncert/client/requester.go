@@ -16,7 +16,6 @@ import (
 	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert"
 	"go-ndncert/ndncert/server"
-	"strings"
 	"time"
 )
 
@@ -70,15 +69,11 @@ type requesterState struct {
 	counterInitializationVector *key_helpers.CounterInitializationVector
 	serverBlockCounter          *uint32
 	symmetricKey                [16]byte
-
-	emailAddress *string // Specific to email challenge
 }
 
-// TODO: Handle error messages
-
-func NewRequesterState(requesterName string, emailAddress string, caPrefix string, caPublicIdentityKey *ecdsa.PublicKey, certValidityPeriod uint64, ndnEngine ndn.Engine) (*requesterState, error) {
+func NewRequesterState(caPrefix string, certificateName string, caPublicIdentityKey *ecdsa.PublicKey, certValidityPeriod uint64, ndnEngine ndn.Engine) (*requesterState, error) {
 	logger := log.WithField("module", "requester")
-	logger.Infof("Generating a requester state with Requester Name %s and Ca Prefix %s", requesterName, caPrefix)
+	logger.Infof("Generating a requester state with Ca Prefix %s", caPrefix)
 
 	// Generate ECDH Key Pair used for encryption
 	ecdhState := key_helpers.ECDHState{}
@@ -99,7 +94,7 @@ func NewRequesterState(requesterName string, emailAddress string, caPrefix strin
 	}
 
 	// Generate the cert-request
-	certName := getCertNameFromEmailAddress(caPrefix, emailAddress)
+	certName, _ := enc.NameFromStr(certificateName)
 	certRequest, _, certRequestError := spec_2022.Spec{}.MakeData(
 		certName,
 		&ndn.DataConfig{
@@ -126,7 +121,6 @@ func NewRequesterState(requesterName string, emailAddress string, caPrefix strin
 		interestSigner:              sec.NewEccSigner(false, true, time.Duration(0), certKey, certName),
 		serverBlockCounter:          utils.IdPtr(uint32(0)),
 		ndnEngine:                   ndnEngine,
-		emailAddress:                &emailAddress,
 	}, nil
 }
 
@@ -231,15 +225,15 @@ func (requester *requesterState) ExpressNewInterest() (*NewResult, error) {
 	return newResult, nil
 }
 
-func (requester *requesterState) ExpressEmailChoiceChallenge() (*ChallengeResult, error) {
+func (requester *requesterState) ExpressEmailChoiceChallenge(emailAddress string) (*ChallengeResult, error) {
 	logger := log.WithField("module", "requester")
-	logger.Infof("Generating an email code choice CHALLENGE with email: %s", *requester.emailAddress)
+	logger.Infof("Generating an email code choice CHALLENGE with email: %s", emailAddress)
 	if requester.challengeStatus != ChallengeStatusAfterNewData {
 		logger.Error("Bad attempt to generate email choice CHALLENGE: does not follow NEW interest")
 		return nil, errors.New("invalid Email Choice Challenge attempted")
 	}
 	emailParameters := map[string][]byte{
-		server.SelectedChallengeEmail: []byte(*requester.emailAddress),
+		server.SelectedChallengeEmail: []byte(emailAddress),
 	}
 	challengeInterestName, _ := enc.NameFromStr(requester.caPrefix + server.PrefixChallenge + "/" + string(requester.requestId[:]))
 	challengeInterestPlaintext := ndncert.ChallengeInterestPlaintext{
@@ -543,24 +537,6 @@ func validateNdnInterestResult(result ndn.InterestResult, nackReason *uint64) er
 		return errors.New("info failed: interest cancelled")
 	}
 	return nil
-}
-
-// Specialized function to handle the specific certificate format of ndncert-cxx - cert name must follow
-// the following convention - (Assuming email form username@domainname.extension) ca_prefix/extension/domain/username
-func getCertNameFromEmailAddress(caPrefix string, emailAddress string) enc.Name {
-	atSplit := strings.Split(emailAddress, "@")
-	if len(atSplit) != 2 {
-		return nil
-	}
-	dotSplit := strings.Split(atSplit[1], ".")
-	var stringBuilder strings.Builder
-	stringBuilder.WriteString(caPrefix)
-	stringBuilder.WriteString("/" + atSplit[0])
-	for i := len(dotSplit) - 1; i >= 0; i-- {
-		stringBuilder.WriteString("/" + dotSplit[i])
-	}
-	certName, _ := enc.NameFromStr(stringBuilder.String())
-	return certName
 }
 
 // No way to actually "mime" the type of the message - error or regular, so we have to attempt error message parsing.

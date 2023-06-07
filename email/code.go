@@ -20,8 +20,8 @@ type SMTPConfig struct {
 		Port     int64  `yaml:"port"`
 	}
 	Email struct {
-		CodeEmailBody        string `yaml:"codeEmailSubjectLine"`
 		CodeEmailSubjectLine string `yaml:"codeEmailSubjectLine"`
+		CodeEmailBody        string `yaml:"codeEmailBody"`
 	}
 }
 
@@ -60,7 +60,7 @@ func NewSmtpModule(smtpConfigFilePath string) (*SmtpModule, error) {
 }
 
 func (smtpModule *SmtpModule) SendCodeEmail(challengeEmail string, challengeCode string) (Status, error) {
-	subject := fmt.Sprintf("From: <%s>\r\nTo: <%s>\r\n%s\r\n\r\n",
+	subject := fmt.Sprintf("From: <%s>\r\nTo: <%s>\r\nSubject: %s\r\n\r\n",
 		smtpModule.OriginEmail,
 		[]string{challengeEmail},
 		smtpModule.CodeEmailSubjectLine)

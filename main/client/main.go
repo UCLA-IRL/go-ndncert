@@ -11,11 +11,29 @@ import (
 	"go-ndncert/key_helpers"
 	"go-ndncert/ndncert/client"
 	"golang.org/x/term"
+	"strings"
 	"syscall"
 )
 
 func passAll(enc.Name, enc.Wire, ndn.Signature) bool {
 	return true
+}
+
+// Specialized function to handle the specific certificate format of ndncert-cxx - cert name must follow
+// the following convention - (Assuming email form username@domainname.extension) ca_prefix/extension/domain/username
+func getCertNameFromEmailAddress(caPrefix string, emailAddress string) string {
+	atSplit := strings.Split(emailAddress, "@")
+	if len(atSplit) != 2 {
+		return ""
+	}
+	dotSplit := strings.Split(atSplit[1], ".")
+	var stringBuilder strings.Builder
+	stringBuilder.WriteString(caPrefix)
+	stringBuilder.WriteString("/" + atSplit[0])
+	for i := len(dotSplit) - 1; i >= 0; i-- {
+		stringBuilder.WriteString("/" + dotSplit[i])
+	}
+	return stringBuilder.String()
 }
 
 func main() {
@@ -54,16 +72,16 @@ func main() {
 	var email string
 	fmt.Print("Enter the email you wish to send the secret code to: ")
 	fmt.Scanln(&email)
-	requesterState, _ := client.NewRequesterState("client", email, caPrefix, caPublicIdentityKey, 3600, ndnEngine)
+	requesterState, _ := client.NewRequesterState(caPrefix, getCertNameFromEmailAddress(caPrefix, email), caPublicIdentityKey, 3600, ndnEngine)
 	newResult, newError := requesterState.ExpressNewInterest()
 	if newError != nil {
-		logger.Fatalf("Encountered error in NEW: %+v", newError)
+		logger.Errorf("Encountered error in NEW: %+v", newError)
 	}
 	if newResult.ErrorMessage != nil {
 		logger.Fatalf("Encountered error message in NEW: %+v", *newResult.ErrorMessage)
 	}
 	logger.Infof("NEW step succeeded with result %+v", newResult)
-	emailChoiceChallengeResult, emailChoiceChallengeError := requesterState.ExpressEmailChoiceChallenge()
+	emailChoiceChallengeResult, emailChoiceChallengeError := requesterState.ExpressEmailChoiceChallenge(email)
 	if emailChoiceChallengeError != nil {
 		logger.Fatalf("Encountered error email choice CHALLENGE step: %+v\n with error message: %+v", emailChoiceChallengeError, emailChoiceChallengeResult.ErrorMessage)
 	}
