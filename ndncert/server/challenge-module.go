@@ -1,10 +1,11 @@
 package server
 
 import (
-	"go-ndncert/email"
 	"math/rand"
 	"net/mail"
 	"time"
+
+	"github.com/UCLA-IRL/go-ndncert/email"
 )
 
 var maxAttempts uint64 = 3

@@ -2,17 +2,18 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"syscall"
+
+	"github.com/UCLA-IRL/go-ndncert/key_helpers"
+	"github.com/UCLA-IRL/go-ndncert/ndncert/client"
 	"github.com/apex/log"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
 	basic_engine "github.com/zjkmxy/go-ndn/pkg/engine/basic"
 	"github.com/zjkmxy/go-ndn/pkg/ndn"
 	"github.com/zjkmxy/go-ndn/pkg/ndn/spec_2022"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
-	"go-ndncert/key_helpers"
-	"go-ndncert/ndncert/client"
 	"golang.org/x/term"
-	"strings"
-	"syscall"
 )
 
 func passAll(enc.Name, enc.Wire, ndn.Signature) bool {

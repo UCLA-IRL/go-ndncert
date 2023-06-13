@@ -4,6 +4,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"strings"
+	"time"
+
+	"github.com/UCLA-IRL/go-ndncert/email"
+	"github.com/UCLA-IRL/go-ndncert/key_helpers"
+	"github.com/UCLA-IRL/go-ndncert/ndncert"
 	"github.com/apex/log"
 	"github.com/dchest/uniuri"
 	enc "github.com/zjkmxy/go-ndn/pkg/encoding"
@@ -13,13 +19,8 @@ import (
 	_ "github.com/zjkmxy/go-ndn/pkg/schema/rdr"
 	sec "github.com/zjkmxy/go-ndn/pkg/security"
 	"github.com/zjkmxy/go-ndn/pkg/utils"
-	"go-ndncert/email"
-	"go-ndncert/key_helpers"
-	"go-ndncert/ndncert"
 	"go.step.sm/crypto/randutil"
 	"golang.org/x/exp/slices"
-	"strings"
-	"time"
 )
 
 const RequestIdLength = 8
